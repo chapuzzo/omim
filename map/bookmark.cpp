@@ -1,198 +1,190 @@
 #include "map/bookmark.hpp"
 #include "map/track.hpp"
-#include "map/anim_phase_chain.hpp"
 
 #include "map/framework.hpp"
 
-#include "anim/controller.hpp"
-
 #include "base/scope_guard.hpp"
 
-#include "graphics/depth_constants.hpp"
-
-#include "indexer/mercator.hpp"
+#include "geometry/mercator.hpp"
 
 #include "coding/file_reader.hpp"
-#include "../coding/parse_xml.hpp"  // LoadFromKML
+#include "coding/parse_xml.hpp"  // LoadFromKML
 #include "coding/internal/file_data.hpp"
 #include "coding/hex.hpp"
+
+#include "drape/drape_global.hpp"
+#include "drape/color.hpp"
+
+#include "drape_frontend/color_constants.hpp"
 
 #include "platform/platform.hpp"
 
 #include "base/stl_add.hpp"
 #include "base/string_utils.hpp"
 
-#include "std/fstream.hpp"
-#include "std/algorithm.hpp"
-#include "std/auto_ptr.hpp"
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <memory>
 
-unique_ptr<UserMarkCopy> Bookmark::Copy() const
+Bookmark::Bookmark(m2::PointD const & ptOrg, UserMarkContainer * container)
+  : TBase(ptOrg, container)
 {
-  return unique_ptr<UserMarkCopy>(new UserMarkCopy(this, false));
 }
 
-graphics::DisplayList * Bookmark::GetDisplayList(UserMarkDLCache * cache) const
+Bookmark::Bookmark(BookmarkData const & data, m2::PointD const & ptOrg, UserMarkContainer * container)
+  : TBase(ptOrg, container)
+  , m_data(data)
 {
-  return cache->FindUserMark(UserMarkDLCache::Key(GetType(), graphics::EPosAbove, GetContainer()->GetDepth()));
 }
 
-double Bookmark::GetAnimScaleFactor() const
+void Bookmark::SetData(BookmarkData const & data)
 {
-  return m_animScaleFactor;
+  SetDirty();
+  m_data = data;
 }
 
-m2::PointD const & Bookmark::GetPixelOffset() const
+BookmarkData const & Bookmark::GetData() const
 {
-  static m2::PointD s_offset(0.0, 3.0);
-  return s_offset;
+  return m_data;
 }
 
-shared_ptr<anim::Task> Bookmark::CreateAnimTask(Framework & fm)
+dp::Anchor Bookmark::GetAnchor() const
 {
-  m_animScaleFactor = 0.0;
-  return CreateDefaultPinAnim(fm, m_animScaleFactor);
+  return dp::Bottom;
 }
 
-void Bookmark::FillLogEvent(TEventContainer & details) const
+std::string Bookmark::GetSymbolName() const
 {
-  UserMark::FillLogEvent(details);
-  details.emplace("markType", "BOOKMARK");
-  details.emplace("name", GetData().GetName());
+  return GetType();
 }
 
-void BookmarkCategory::AddTrack(Track & track)
+bool Bookmark::HasCreationAnimation() const
 {
-  m_tracks.push_back(track.CreatePersistent());
+  return true;
+}
+
+UserMark::Type Bookmark::GetMarkType() const
+{
+  return UserMark::Type::BOOKMARK;
+}
+
+std::string const & Bookmark::GetName() const
+{
+  return m_data.GetName();
+}
+
+void Bookmark::SetName(std::string const & name)
+{
+  SetDirty();
+  m_data.SetName(name);
+}
+
+std::string const & Bookmark::GetType() const
+{
+  return m_data.GetType();
+}
+
+void Bookmark::SetType(std::string const & type)
+{
+  SetDirty();
+  m_data.SetType(type);
+}
+
+m2::RectD Bookmark::GetViewport() const
+{
+  return m2::RectD(GetPivot(), GetPivot());
+}
+
+std::string const & Bookmark::GetDescription() const
+{
+  return m_data.GetDescription();
+}
+
+void Bookmark::SetDescription(std::string const & description)
+{
+  m_data.SetDescription(description);
+}
+
+time_t Bookmark::GetTimeStamp() const
+{
+  return m_data.GetTimeStamp();
+}
+
+void Bookmark::SetTimeStamp(time_t timeStamp)
+{
+  m_data.SetTimeStamp(timeStamp);
+}
+
+double Bookmark::GetScale() const
+{
+  return m_data.GetScale();
+}
+
+void Bookmark::SetScale(double scale)
+{
+  m_data.SetScale(scale);
+}
+
+void BookmarkCategory::AddTrack(std::unique_ptr<Track> && track)
+{
+  SetDirty();
+  m_tracks.push_back(move(track));
 }
 
 Track const * BookmarkCategory::GetTrack(size_t index) const
 {
-  return (index < m_tracks.size() ? m_tracks[index] : 0);
+  return (index < m_tracks.size() ? m_tracks[index].get() : 0);
 }
 
-Bookmark * BookmarkCategory::AddBookmark(m2::PointD const & ptOrg, BookmarkData const & bm)
-{
-  Bookmark * bookmark = static_cast<Bookmark *>(base_t::GetController().CreateUserMark(ptOrg));
-  bookmark->SetData(bm);
-  return bookmark;
-}
-
-void BookmarkCategory::ReplaceBookmark(size_t index, BookmarkData const & bm)
-{
-  Controller & c = base_t::GetController();
-  ASSERT_LESS (index, c.GetUserMarkCount(), ());
-  if (index < c.GetUserMarkCount())
-  {
-    Bookmark * mark = static_cast<Bookmark *>(c.GetUserMarkForEdit(index));
-    mark->SetData(bm);
-  }
-}
-
-BookmarkCategory::BookmarkCategory(const string & name, Framework & framework)
-  : base_t(graphics::bookmarkDepth, framework)
+BookmarkCategory::BookmarkCategory(std::string const & name, Framework & framework)
+  : TBase(0.0 /* bookmarkDepth */, UserMark::Type::BOOKMARK, framework)
   , m_name(name)
-  , m_blockAnimation(false)
 {
 }
 
 BookmarkCategory::~BookmarkCategory()
 {
-  ClearBookmarks();
   ClearTracks();
 }
 
-void BookmarkCategory::ClearBookmarks()
+size_t BookmarkCategory::GetUserLineCount() const
 {
-  base_t::Clear();
+  return m_tracks.size();
+}
+
+df::UserLineMark const * BookmarkCategory::GetUserLineMark(size_t index) const
+{
+  ASSERT_LESS(index, m_tracks.size(), ());
+  return m_tracks[index].get();
 }
 
 void BookmarkCategory::ClearTracks()
 {
-  for_each(m_tracks.begin(), m_tracks.end(), DeleteFunctor());
   m_tracks.clear();
-}
-
-namespace
-{
-
-template <class T> void DeleteItem(vector<T> & v, size_t i)
-{
-  if (i < v.size())
-  {
-    delete v[i];
-    v.erase(v.begin() + i);
-  }
-  else
-  {
-    LOG(LWARNING, ("Trying to delete non-existing item at index", i));
-  }
-}
-
-}
-
-void BookmarkCategory::DeleteBookmark(size_t index)
-{
-  base_t::Controller & c = base_t::GetController();
-  ASSERT_LESS(index, c.GetUserMarkCount(), ());
-  UserMark const * markForDelete = c.GetUserMark(index);
-
-  size_t animIndex = 0;
-  for (; animIndex < m_anims.size(); ++animIndex)
-  {
-    anim_node_t const & anim = m_anims[animIndex];
-    if (anim.first == markForDelete)
-    {
-      anim.second->Cancel();
-      break;
-    }
-  }
-
-  if (animIndex < m_anims.size())
-    m_anims.erase(m_anims.begin() + animIndex);
-
-  c.DeleteUserMark(index);
 }
 
 void BookmarkCategory::DeleteTrack(size_t index)
 {
-  DeleteItem(m_tracks, index);
-}
-
-size_t BookmarkCategory::GetBookmarksCount() const
-{
-  return base_t::GetController().GetUserMarkCount();
-}
-
-Bookmark const * BookmarkCategory::GetBookmark(size_t index) const
-{
-  base_t::Controller const & c = base_t::GetController();
-  return static_cast<Bookmark const *>(index < c.GetUserMarkCount() ? c.GetUserMark(index) : nullptr);
-}
-
-Bookmark * BookmarkCategory::GetBookmark(size_t index)
-{
-  base_t::Controller & c = base_t::GetController();
-  return static_cast<Bookmark *>(index < c.GetUserMarkCount() ? c.GetUserMarkForEdit(index) : nullptr);
-}
-
-size_t BookmarkCategory::FindBookmark(Bookmark const * bookmark) const
-{
-  return base_t::GetController().FindUserMark(bookmark);
+  SetDirty();
+  ASSERT_LESS(index, m_tracks.size(), ());
+  m_tracks.erase(next(m_tracks.begin(), index));
 }
 
 namespace
 {
+  std::string const kPlacemark = "Placemark";
+  std::string const kStyle = "Style";
+  std::string const kDocument = "Document";
+  std::string const kStyleMap = "StyleMap";
+  std::string const kStyleUrl = "styleUrl";
+  std::string const kPair = "Pair";
 
-  string const PLACEMARK = "Placemark";
-  string const STYLE = "Style";
-  string const DOCUMENT =  "Document";
-  string const STYLE_MAP = "StyleMap";
-  string const STYLE_URL = "styleUrl";
-  string const PAIR = "Pair";
+  std::string const kDefaultTrackColor = "DefaultTrackColor";
+  float const kDefaultTrackWidth = 5.0f;
 
-  graphics::Color const DEFAULT_TRACK_COLOR = graphics::Color::fromARGB(0xFF33CCFF);
-
-  string PointToString(m2::PointD const & org)
+  std::string PointToString(m2::PointD const & org)
   {
     double const lon = MercatorBounds::XToLon(org.x);
     double const lat = MercatorBounds::YToLat(org.y);
@@ -206,49 +198,38 @@ namespace
 
   enum GeometryType
   {
-    UNKNOWN,
-    POINT,
-    LINE
-  };
-
-  static char const * s_arrSupportedColors[] =
-  {
-    "placemark-red", "placemark-blue", "placemark-purple", "placemark-yellow",
-    "placemark-pink", "placemark-brown", "placemark-green", "placemark-orange"
+    GEOMETRY_TYPE_UNKNOWN,
+    GEOMETRY_TYPE_POINT,
+    GEOMETRY_TYPE_LINE
   };
 
   class KMLParser
   {
-    // Fixes icons which are not supported by MapsWithMe
-    string GetSupportedBMType(string const & s) const
+    // Fixes icons which are not supported by MapsWithMe.
+    std::string GetSupportedBMType(std::string const & s) const
     {
-      // Remove leading '#' symbol
-      string const result = s.substr(1);
-      for (size_t i = 0; i < ARRAY_SIZE(s_arrSupportedColors); ++i)
-        if (result == s_arrSupportedColors[i])
-          return result;
-
-      // Not recognized symbols are replaced with default one
-      LOG(LWARNING, ("Icon", result, "for bookmark", m_name, "is not supported"));
-      return s_arrSupportedColors[0];
+      // Remove leading '#' symbol.
+      ASSERT(!s.empty(), ());
+      std::string const result = s.substr(1);
+      return style::GetSupportedStyle(result, m_name, style::GetDefaultStyle());
     }
 
     BookmarkCategory & m_category;
 
-    vector<string> m_tags;
+    std::vector<std::string> m_tags;
     GeometryType m_geometryType;
     m2::PolylineD m_points;
-    graphics::Color m_trackColor;
+    dp::Color m_trackColor;
 
-    string m_styleId;
-    string m_mapStyleId;
-    string m_styleUrlKey;
-    map<string, graphics::Color> m_styleUrl2Color;
-    map<string, string> m_mapStyle2Style;
+    std::string m_styleId;
+    std::string m_mapStyleId;
+    std::string m_styleUrlKey;
+    std::map<std::string, dp::Color> m_styleUrl2Color;
+    std::map<std::string, std::string> m_mapStyle2Style;
 
-    string m_name;
-    string m_type;
-    string m_description;
+    std::string m_name;
+    std::string m_type;
+    std::string m_description;
     time_t m_timeStamp;
 
     m2::PointD m_org;
@@ -263,16 +244,16 @@ namespace
       m_scale = -1.0;
       m_timeStamp = my::INVALID_TIME_STAMP;
 
-      m_trackColor = DEFAULT_TRACK_COLOR;
+      m_trackColor = df::GetColorConstant(kDefaultTrackColor);
       m_styleId.clear();
       m_mapStyleId.clear();
       m_styleUrlKey.clear();
 
       m_points.Clear();
-      m_geometryType = UNKNOWN;
+      m_geometryType = GEOMETRY_TYPE_UNKNOWN;
     }
 
-    bool ParsePoint(string const & s, char const * delim, m2::PointD & pt)
+    bool ParsePoint(std::string const & s, char const * delim, m2::PointD & pt)
     {
       // order in string is: lon, lat, z
 
@@ -296,32 +277,35 @@ namespace
       return false;
     }
 
-    void SetOrigin(string const & s)
+    void SetOrigin(std::string const & s)
     {
-      m_geometryType = POINT;
+      m_geometryType = GEOMETRY_TYPE_POINT;
 
       m2::PointD pt;
       if (ParsePoint(s, ", \n\r\t", pt))
         m_org = pt;
     }
 
-    void ParseLineCoordinates(string const & s, char const * blockSeparator, char const * coordSeparator)
+    void ParseLineCoordinates(std::string const & s, char const * blockSeparator, char const * coordSeparator)
     {
-      m_geometryType = LINE;
+      m_geometryType = GEOMETRY_TYPE_LINE;
 
       strings::SimpleTokenizer cortegeIter(s, blockSeparator);
       while (cortegeIter)
       {
         m2::PointD pt;
         if (ParsePoint(*cortegeIter, coordSeparator, pt))
-          m_points.Add(pt);
+        {
+          if (m_points.GetSize() == 0 || !(pt - m_points.Back()).IsAlmostZero())
+            m_points.Add(pt);
+        }
         ++cortegeIter;
       }
     }
 
     bool MakeValid()
-    { 
-      if (POINT == m_geometryType)
+    {
+      if (GEOMETRY_TYPE_POINT == m_geometryType)
       {
         if (MercatorBounds::ValidX(m_org.x) && MercatorBounds::ValidY(m_org.y))
         {
@@ -337,7 +321,7 @@ namespace
         }
         return false;
       }
-      else if (LINE == m_geometryType)
+      else if (GEOMETRY_TYPE_LINE == m_geometryType)
       {
         return m_points.GetSize() > 1;
       }
@@ -345,21 +329,21 @@ namespace
       return false;
     }
 
-    void ParseColor(string const & value)
+    void ParseColor(std::string const & value)
     {
-      string fromHex = FromHex(value);
+      std::string fromHex = FromHex(value);
       ASSERT(fromHex.size() == 4, ("Invalid color passed"));
       // Color positions in HEX – aabbggrr
-      m_trackColor = graphics::Color(fromHex[3], fromHex[2], fromHex[1], fromHex[0]);
+      m_trackColor = dp::Color(fromHex[3], fromHex[2], fromHex[1], fromHex[0]);
     }
 
-    bool GetColorForStyle(string const & styleUrl, graphics::Color & color)
+    bool GetColorForStyle(std::string const & styleUrl, dp::Color & color)
     {
       if (styleUrl.empty())
         return false;
 
       // Remove leading '#' symbol
-      map<string, graphics::Color>::const_iterator it = m_styleUrl2Color.find(styleUrl.substr(1));
+      auto it = m_styleUrl2Color.find(styleUrl.substr(1));
       if (it != m_styleUrl2Color.end())
       {
         color = it->second;
@@ -369,71 +353,79 @@ namespace
     }
 
   public:
-    KMLParser(BookmarkCategory & cat) : m_category(cat)
+    KMLParser(BookmarkCategory & cat)
+      : m_category(cat)
     {
       Reset();
     }
 
-    bool Push(string const & name)
+    ~KMLParser()
+    {
+      m_category.NotifyChanges();
+    }
+
+    bool Push(std::string const & name)
     {
       m_tags.push_back(name);
       return true;
     }
 
-    void AddAttr(string const & attr, string const & value)
+    void AddAttr(std::string const & attr, std::string const & value)
     {
-      string attrInLowerCase = attr;
+      std::string attrInLowerCase = attr;
       strings::AsciiToLower(attrInLowerCase);
 
-      if (IsValidAttribute(STYLE, value, attrInLowerCase))
+      if (IsValidAttribute(kStyle, value, attrInLowerCase))
         m_styleId = value;
-      else if (IsValidAttribute(STYLE_MAP, value, attrInLowerCase))
+      else if (IsValidAttribute(kStyleMap, value, attrInLowerCase))
         m_mapStyleId = value;
     }
 
-    bool IsValidAttribute(string const & type, string const & value, string const & attrInLowerCase) const
+    bool IsValidAttribute(std::string const & type, std::string const & value,
+                          std::string const & attrInLowerCase) const
     {
       return (GetTagFromEnd(0) == type && !value.empty() && attrInLowerCase == "id");
     }
 
-    string const & GetTagFromEnd(size_t n) const
+    std::string const & GetTagFromEnd(size_t n) const
     {
       ASSERT_LESS(n, m_tags.size(), ());
       return m_tags[m_tags.size() - n - 1];
     }
 
-    void Pop(string const & tag)
+    void Pop(std::string const & tag)
     {
       ASSERT_EQUAL(m_tags.back(), tag, ());
 
-      if (tag == PLACEMARK)
+      if (tag == kPlacemark)
       {
         if (MakeValid())
         {
-          if (POINT == m_geometryType)
-            m_category.AddBookmark(m_org, BookmarkData(m_name, m_type, m_description, m_scale, m_timeStamp));
-          else if (LINE == m_geometryType)
+          if (GEOMETRY_TYPE_POINT == m_geometryType)
           {
-            Track track(m_points);
-            track.SetName(m_name);
-
-            Track::TrackOutline trackOutline { 5.0f, m_trackColor };
-            track.AddOutline(&trackOutline, 1);
+            Bookmark * bm = static_cast<Bookmark *>(m_category.CreateUserMark(m_org));
+            bm->SetData(BookmarkData(m_name, m_type, m_description, m_scale, m_timeStamp));
+          }
+          else if (GEOMETRY_TYPE_LINE == m_geometryType)
+          {
+            Track::Params params;
+            params.m_colors.push_back({ kDefaultTrackWidth, m_trackColor });
+            params.m_name = m_name;
 
             /// @todo Add description, style, timestamp
-            m_category.AddTrack(track);
+            m_category.AddTrack(make_unique<Track>(m_points, params));
           }
         }
         Reset();
       }
-      else if (tag == STYLE)
+      else if (tag == kStyle)
       {
-        if (GetTagFromEnd(1) == DOCUMENT)
+        if (GetTagFromEnd(1) == kDocument)
         {
           if (!m_styleId.empty())
           {
             m_styleUrl2Color[m_styleId] = m_trackColor;
-            m_trackColor = DEFAULT_TRACK_COLOR;
+            m_trackColor = df::GetColorConstant(kDefaultTrackColor);
           }
         }
       }
@@ -441,25 +433,25 @@ namespace
       m_tags.pop_back();
     }
 
-    void CharData(string value)
+    void CharData(std::string value)
     {
       strings::Trim(value);
 
       size_t const count = m_tags.size();
       if (count > 1 && !value.empty())
       {
-        string const & currTag = m_tags[count - 1];
-        string const & prevTag = m_tags[count - 2];
-        string const ppTag = count > 3 ? m_tags[count - 3] : string();
+        std::string const & currTag = m_tags[count - 1];
+        std::string const & prevTag = m_tags[count - 2];
+        std::string const ppTag = count > 3 ? m_tags[count - 3] : std::string();
 
-        if (prevTag == DOCUMENT)
+        if (prevTag == kDocument)
         {
           if (currTag == "name")
             m_category.SetName(value);
           else if (currTag == "visibility")
-            m_category.SetVisible(value == "0" ? false : true);
+            m_category.SetIsVisible(value == "0" ? false : true);
         }
-        else if (prevTag == PLACEMARK)
+        else if (prevTag == kPlacemark)
         {
           if (currTag == "name")
             m_name = value;
@@ -472,7 +464,7 @@ namespace
             if (!GetColorForStyle(value, m_trackColor))
             {
               // Remove leading '#' symbol.
-              string styleId = m_mapStyle2Style[value.substr(1)];
+              std::string styleId = m_mapStyle2Style[value.substr(1)];
               if (!styleId.empty())
                 GetColorForStyle(styleId, m_trackColor);
             }
@@ -484,16 +476,17 @@ namespace
         {
           ParseColor(value);
         }
-        else if (ppTag == STYLE_MAP && prevTag == PAIR && currTag == STYLE_URL && m_styleUrlKey == "normal")
+        else if (ppTag == kStyleMap && prevTag == kPair && currTag == kStyleUrl &&
+                 m_styleUrlKey == "normal")
         {
           if (!m_mapStyleId.empty())
             m_mapStyle2Style[m_mapStyleId] = value;
         }
-        else if (ppTag == STYLE_MAP && prevTag == PAIR && currTag == "key")
+        else if (ppTag == kStyleMap && prevTag == kPair && currTag == "key")
         {
           m_styleUrlKey = value;
         }
-        else if (ppTag == PLACEMARK)
+        else if (ppTag == kPlacemark)
         {
           if (prevTag == "Point")
           {
@@ -527,7 +520,7 @@ namespace
                 LOG(LWARNING, ("Invalid timestamp in Placemark:", value));
             }
           }
-          else if (currTag == STYLE_URL)
+          else if (currTag == kStyleUrl)
           {
             GetColorForStyle(value, m_trackColor);
           }
@@ -563,36 +556,13 @@ namespace
   };
 }
 
-string BookmarkCategory::GetDefaultType()
+std::string BookmarkCategory::GetDefaultType()
 {
-  return s_arrSupportedColors[0];
-}
-
-namespace
-{
-  struct AnimBlockGuard
-  {
-  public:
-    AnimBlockGuard(bool & block)
-      : m_block(block)
-    {
-      m_block = true;
-    }
-
-    ~AnimBlockGuard()
-    {
-      m_block = false;
-    }
-
-  private:
-    bool & m_block;
-  };
+  return style::GetDefaultStyle();
 }
 
 bool BookmarkCategory::LoadFromKML(ReaderPtr<Reader> const & reader)
 {
-  AnimBlockGuard g(m_blockAnimation);
-
   ReaderSource<ReaderPtr<Reader> > src(reader);
   KMLParser parser(*this);
   if (ParseXML(src, parser, true))
@@ -604,12 +574,12 @@ bool BookmarkCategory::LoadFromKML(ReaderPtr<Reader> const & reader)
   }
 }
 
-BookmarkCategory * BookmarkCategory::CreateFromKMLFile(string const & file, Framework & framework)
+BookmarkCategory * BookmarkCategory::CreateFromKMLFile(std::string const & file, Framework & framework)
 {
-  auto_ptr<BookmarkCategory> cat(new BookmarkCategory("", framework));
+  std::auto_ptr<BookmarkCategory> cat(new BookmarkCategory("", framework));
   try
   {
-    if (cat->LoadFromKML(new FileReader(file)))
+    if (cat->LoadFromKML(make_unique<FileReader>(file)))
       cat->m_file = file;
     else
       cat.reset();
@@ -694,17 +664,17 @@ char const * kmlFooter =
 
 namespace
 {
-  inline void SaveStringWithCDATA(ostream & stream, string const & s)
+  inline void SaveStringWithCDATA(std::ostream & stream, std::string const & s)
   {
     // According to kml/xml spec, we need to escape special symbols with CDATA
-    if (s.find_first_of("<&") != string::npos)
+    if (s.find_first_of("<&") != std::string::npos)
       stream << "<![CDATA[" << s << "]]>";
     else
       stream << s;
   }
 }
 
-void BookmarkCategory::SaveToKML(ostream & s)
+void BookmarkCategory::SaveToKML(std::ostream & s)
 {
   s << kmlHeader;
 
@@ -728,10 +698,10 @@ void BookmarkCategory::SaveToKML(ostream & s)
   // processed during the iteration. That's why i is initially set to
   // GetBookmarksCount() - 1, i.e. to the last bookmark in the
   // bookmarks list.
-  for (size_t count = 0, i = GetBookmarksCount() - 1;
-       count < GetBookmarksCount(); ++count, --i)
+  for (size_t count = 0, i = GetUserMarkCount() - 1;
+       count < GetUserPointCount(); ++count, --i)
   {
-    Bookmark const * bm = GetBookmark(i);
+    Bookmark const * bm = static_cast<Bookmark const *>(GetUserMark(i));
     s << "  <Placemark>\n";
     s << "    <name>";
     SaveStringWithCDATA(s, bm->GetName());
@@ -747,13 +717,13 @@ void BookmarkCategory::SaveToKML(ostream & s)
     time_t const timeStamp = bm->GetTimeStamp();
     if (timeStamp != my::INVALID_TIME_STAMP)
     {
-      string const strTimeStamp = my::TimestampToString(timeStamp);
+      std::string const strTimeStamp = my::TimestampToString(timeStamp);
       ASSERT_EQUAL(strTimeStamp.size(), 20, ("We always generate fixed length UTC-format timestamp"));
       s << "    <TimeStamp><when>" << strTimeStamp << "</when></TimeStamp>\n";
     }
 
     s << "    <styleUrl>#" << bm->GetType() << "</styleUrl>\n"
-      << "    <Point><coordinates>" << PointToString(bm->GetOrg()) << "</coordinates></Point>\n";
+      << "    <Point><coordinates>" << PointToString(bm->GetPivot()) << "</coordinates></Point>\n";
 
     double const scale = bm->GetScale();
     if (scale != -1.0)
@@ -777,17 +747,19 @@ void BookmarkCategory::SaveToKML(ostream & s)
     SaveStringWithCDATA(s, track->GetName());
     s << "</name>\n";
 
+    ASSERT_GREATER(track->GetLayerCount(), 0, ());
+
     s << "<Style><LineStyle>";
-    graphics::Color const & col = track->GetMainColor();
+    dp::Color const & col = track->GetColor(0);
     s << "<color>"
-      << NumToHex(col.a)
-      << NumToHex(col.b)
-      << NumToHex(col.g)
-      << NumToHex(col.r);
+      << NumToHex(col.GetAlfa())
+      << NumToHex(col.GetBlue())
+      << NumToHex(col.GetGreen())
+      << NumToHex(col.GetRed());
     s << "</color>\n";
 
     s << "<width>"
-      << track->GetMainWidth();
+      << track->GetWidth(0);
     s << "</width>\n";
 
     s << "</LineStyle></Style>\n";
@@ -796,7 +768,7 @@ void BookmarkCategory::SaveToKML(ostream & s)
     s << "    <LineString><coordinates>";
 
     Track::PolylineD const & poly = track->GetPolyline();
-    for (Track::PolylineD::TIter pt = poly.Begin(); pt != poly.End(); ++pt)
+    for (auto pt = poly.Begin(); pt != poly.End(); ++pt)
       s << PointToString(*pt) << " ";
 
     s << "    </coordinates></LineString>\n"
@@ -820,7 +792,7 @@ namespace
   }
 }
 
-string BookmarkCategory::RemoveInvalidSymbols(string const & name)
+std::string BookmarkCategory::RemoveInvalidSymbols(std::string const & name)
 {
   // Remove not allowed symbols
   strings::UniString uniName = strings::MakeUniString(name);
@@ -828,13 +800,13 @@ string BookmarkCategory::RemoveInvalidSymbols(string const & name)
   return (uniName.empty() ? "Bookmarks" : strings::ToUtf8(uniName));
 }
 
-string BookmarkCategory::GenerateUniqueFileName(const string & path, string name)
+std::string BookmarkCategory::GenerateUniqueFileName(const std::string & path, std::string name)
 {
-  string const kmlExt(BOOKMARKS_FILE_EXTENSION);
+  std::string const kmlExt(BOOKMARKS_FILE_EXTENSION);
 
   // check if file name already contains .kml extension
   size_t const extPos = name.rfind(kmlExt);
-  if (extPos != string::npos)
+  if (extPos != std::string::npos)
   {
     // remove extension
     ASSERT_GREATER_OR_EQUAL(name.size(), kmlExt.size(), ());
@@ -844,55 +816,31 @@ string BookmarkCategory::GenerateUniqueFileName(const string & path, string name
   }
 
   size_t counter = 1;
-  string suffix;
+  std::string suffix;
   while (Platform::IsFileExistsByFullPath(path + name + suffix + kmlExt))
     suffix = strings::to_string(counter++);
   return (path + name + suffix + kmlExt);
 }
 
-void BookmarkCategory::ReleaseAnimations()
-{
-  vector<anim_node_t> tempAnims;
-  for (size_t i = 0; i < m_anims.size(); ++i)
-  {
-    anim_node_t const & anim = m_anims[i];
-    if (!anim.second->IsEnded() &&
-        !anim.second->IsCancelled())
-    {
-      tempAnims.push_back(m_anims[i]);
-    }
-  }
-
-  swap(m_anims, tempAnims);
-}
-
 UserMark * BookmarkCategory::AllocateUserMark(m2::PointD const & ptOrg)
 {
-  Bookmark * b = new Bookmark(ptOrg, this);
-  if (!m_blockAnimation)
-  {
-    shared_ptr<anim::Task> animTask = b->CreateAnimTask(m_framework);
-    animTask->AddCallback(anim::Task::EEnded, bind(&BookmarkCategory::ReleaseAnimations, this));
-    m_anims.push_back(make_pair((UserMark *)b, animTask));
-    m_framework.GetAnimController()->AddTask(animTask);
-  }
-  return b;
+  return new Bookmark(ptOrg, this);
 }
 
 bool BookmarkCategory::SaveToKMLFile()
 {
-  string oldFile;
+  std::string oldFile;
 
   // Get valid file name from category name
-  string const name = RemoveInvalidSymbols(m_name);
+  std::string const name = RemoveInvalidSymbols(m_name);
 
   if (!m_file.empty())
   {
     size_t i2 = m_file.find_last_of('.');
-    if (i2 == string::npos)
+    if (i2 == std::string::npos)
       i2 = m_file.size();
     size_t i1 = m_file.find_last_of("\\/");
-    if (i1 == string::npos)
+    if (i1 == std::string::npos)
       i1 = 0;
     else
       ++i1;
@@ -907,13 +855,13 @@ bool BookmarkCategory::SaveToKMLFile()
   else
     m_file = GenerateUniqueFileName(GetPlatform().SettingsDir(), name);
 
-  string const fileTmp = m_file + ".tmp";
+  std::string const fileTmp = m_file + ".tmp";
 
   try
   {
     // First, we save to the temporary file
     /// @todo On Windows UTF-8 file names are not supported.
-    ofstream of(fileTmp.c_str(), std::ios_base::out | std::ios_base::trunc);
+    std::ofstream of(fileTmp.c_str(), std::ios_base::out | std::ios_base::trunc);
     SaveToKML(of);
     of.flush();
 

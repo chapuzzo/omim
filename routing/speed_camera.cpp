@@ -1,4 +1,4 @@
-#include "speed_camera.hpp"
+#include "routing/speed_camera.hpp"
 
 #include "indexer/classificator.hpp"
 #include "indexer/ftypes_matcher.hpp"
@@ -27,7 +27,6 @@ uint8_t const kNoSpeedCamera = numeric_limits<uint8_t>::max();
 uint8_t ReadCameraRestriction(FeatureType & ft)
 {
   using feature::Metadata;
-  ft.ParseMetadata();
   feature::Metadata const & md = ft.GetMetadata();
   string const & speed = md.Get(Metadata::FMD_MAXSPEED);
   if (speed.empty())

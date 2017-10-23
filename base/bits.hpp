@@ -1,14 +1,14 @@
 #pragma once
 #include "base/assert.hpp"
 
-#include "std/cstdint.hpp"
-#include "std/type_traits.hpp"
-
+#include <cstdint>
+#include <limits>
+#include <type_traits>
 
 namespace bits
 {
   // Count the number of 1 bits. Implementation: see Hacker's delight book.
-  inline uint32_t popcount(uint32_t x)
+  inline uint32_t PopCount(uint32_t x) noexcept
   {
     x -= ((x >> 1) & 0x55555555);
     x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
@@ -18,14 +18,14 @@ namespace bits
     return x & 0x3F;
   }
 
-  inline uint32_t popcount(uint8_t x)
+  inline uint32_t PopCount(uint8_t x) noexcept
   {
-    return popcount(static_cast<uint32_t>(x));
+    return PopCount(static_cast<uint32_t>(x));
   }
 
   // Count the number of 1 bits in array p, length n bits.
   // There is a better implementation at hackersdelight.org
-  inline uint32_t popcount(uint32_t const * p, uint32_t n)
+  inline uint32_t PopCount(uint32_t const * p, uint32_t n)
   {
     uint32_t s = 0;
     for (uint32_t i = 0; i < n; i += 31)
@@ -61,10 +61,38 @@ namespace bits
     return static_cast<unsigned int>(SELECT1_ERROR);
   }
 
+  inline uint32_t PopCount(uint64_t x) noexcept
+  {
+    x = x - ((x & 0xAAAAAAAAAAAAAAAA) >> 1);
+    x = (x & 0x3333333333333333) + ((x >> 2) & 0x3333333333333333);
+    x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0F;
+    x = (x * 0x0101010101010101) >> 56;
+    return static_cast<uint32_t>(x);
+  }
+
+  inline uint8_t FloorLog(uint64_t x) noexcept
+  {
+#define CHECK_RSH(x, msb, offset) \
+    if (x >> offset)              \
+    {                             \
+      x >>= offset;               \
+      msb += offset;              \
+    }
+
+    uint8_t msb = 0;
+    CHECK_RSH(x, msb, 32);
+    CHECK_RSH(x, msb, 16);
+    CHECK_RSH(x, msb, 8);
+    CHECK_RSH(x, msb, 4);
+    CHECK_RSH(x, msb, 2);
+    CHECK_RSH(x, msb, 1);
+#undef CHECK_RSH
+
+    return msb;
+  }
+
   // Will be implemented when needed.
-  uint64_t popcount(uint64_t x);
-  // Will be implemented when needed.
-  uint64_t popcount(uint64_t const * p, uint64_t n);
+  uint64_t PopCount(uint64_t const * p, uint64_t n);
 
   template <typename T> T RoundLastBitsUpAndShiftRight(T x, T bits)
   {
@@ -82,16 +110,16 @@ namespace bits
     return (x << 1) | (x >> (sizeof(T) * 8 - 1));
   }
 
-  template <typename T> inline typename make_unsigned<T>::type ZigZagEncode(T x)
+  template <typename T> inline typename std::make_unsigned<T>::type ZigZagEncode(T x)
   {
-    static_assert(is_signed<T>::value, "Type should be signed");
+    static_assert(std::is_signed<T>::value, "Type should be signed");
     return (x << 1) ^ (x >> (sizeof(x) * 8 - 1));
   }
 
-  template <typename T> inline typename make_signed<T>::type ZigZagDecode(T x)
+  template <typename T> inline typename std::make_signed<T>::type ZigZagDecode(T x)
   {
-    static_assert(is_unsigned<T>::value, "Type should be unsigned.");
-    return (x >> 1) ^ -static_cast<typename make_signed<T>::type>(x & 1);
+    static_assert(std::is_unsigned<T>::value, "Type should be unsigned.");
+    return (x >> 1) ^ -static_cast<typename std::make_signed<T>::type>(x & 1);
   }
 
   inline uint32_t PerfectShuffle(uint32_t x)
@@ -171,4 +199,13 @@ namespace bits
     while (n != 0) { ++result; n >>= 1; }
     return result;
   }
-}
+
+  inline uint64_t GetFullMask(uint8_t numBits)
+  {
+    ASSERT_LESS_OR_EQUAL(numBits, 64, ());
+    return numBits == 64 ? std::numeric_limits<uint64_t>::max()
+                         : (static_cast<uint64_t>(1) << numBits) - 1;
+  }
+
+  inline bool IsPow2Minus1(uint64_t n) { return (n & (n + 1)) == 0; }
+}  // namespace bits

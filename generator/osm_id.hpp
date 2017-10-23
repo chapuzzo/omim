@@ -1,8 +1,8 @@
 #pragma once
 
-#include "std/cstdint.hpp"
-#include "std/string.hpp"
-
+#include <cstdint>
+#include <functional>
+#include <string>
 
 namespace osm
 {
@@ -21,15 +21,24 @@ public:
   static Id Relation(uint64_t osmId);
 
   uint64_t OsmId() const;
+  uint64_t EncodedId() const;
+  bool IsNode() const;
   bool IsWay() const;
+  bool IsRelation() const;
 
   /// For debug output
-  string Type() const;
+  std::string Type() const;
 
-  bool operator<(Id const & other) const { return m_encodedId < other.m_encodedId; }
-  bool operator==(Id const & other) const { return m_encodedId == other.m_encodedId; }
+  inline bool operator<(Id const & other) const { return m_encodedId < other.m_encodedId; }
+  inline bool operator==(Id const & other) const { return m_encodedId == other.m_encodedId; }
+  inline bool operator!=(Id const & other) const { return !(*this == other); }
+  bool operator==(uint64_t other) const { return OsmId() == other; }
 };
 
-string DebugPrint(osm::Id const & id);
+struct HashId : private std::hash<uint64_t>
+{
+  size_t operator()(Id const & id) const { return std::hash<uint64_t>::operator()(id.OsmId()); }
+};
 
+std::string DebugPrint(osm::Id const & id);
 } // namespace osm

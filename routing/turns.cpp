@@ -1,9 +1,11 @@
 #include "routing/turns.hpp"
 
+#include "geometry/angles.hpp"
+
 #include "base/internal/message.hpp"
 
 #include "std/array.hpp"
-
+#include "std/utility.hpp"
 
 namespace
 {
@@ -11,7 +13,7 @@ using namespace routing::turns;
 
 /// The order is important. Starting with the most frequent tokens according to
 /// taginfo.openstreetmap.org we minimize the number of the comparisons in ParseSingleLane().
-array<pair<LaneWay, string>, static_cast<size_t>(LaneWay::Count)> const g_laneWayNames = {
+array<pair<LaneWay, char const *>, static_cast<size_t>(LaneWay::Count)> const g_laneWayNames = {
     {{LaneWay::Through, "through"},
      {LaneWay::Left, "left"},
      {LaneWay::Right, "right"},
@@ -26,31 +28,125 @@ array<pair<LaneWay, string>, static_cast<size_t>(LaneWay::Count)> const g_laneWa
 static_assert(g_laneWayNames.size() == static_cast<size_t>(LaneWay::Count),
               "Check the size of g_laneWayNames");
 
-array<pair<TurnDirection, string>, static_cast<size_t>(TurnDirection::Count)> const g_turnNames = {
-    {{TurnDirection::NoTurn, "NoTurn"},
-     {TurnDirection::GoStraight, "GoStraight"},
-     {TurnDirection::TurnRight, "TurnRight"},
-     {TurnDirection::TurnSharpRight, "TurnSharpRight"},
-     {TurnDirection::TurnSlightRight, "TurnSlightRight"},
-     {TurnDirection::TurnLeft, "TurnLeft"},
-     {TurnDirection::TurnSharpLeft, "TurnSharpLeft"},
-     {TurnDirection::TurnSlightLeft, "TurnSlightLeft"},
-     {TurnDirection::UTurn, "UTurn"},
-     {TurnDirection::TakeTheExit, "TakeTheExit"},
-     {TurnDirection::EnterRoundAbout, "EnterRoundAbout"},
-     {TurnDirection::LeaveRoundAbout, "LeaveRoundAbout"},
-     {TurnDirection::StayOnRoundAbout, "StayOnRoundAbout"},
-     {TurnDirection::StartAtEndOfStreet, "StartAtEndOfStreet"},
-     {TurnDirection::ReachedYourDestination, "ReachedYourDestination"}}};
-static_assert(g_turnNames.size() == static_cast<size_t>(TurnDirection::Count),
+array<pair<CarDirection, char const *>, static_cast<size_t>(CarDirection::Count)> const g_turnNames = {
+    {{CarDirection::None, "None"},
+     {CarDirection::GoStraight, "GoStraight"},
+     {CarDirection::TurnRight, "TurnRight"},
+     {CarDirection::TurnSharpRight, "TurnSharpRight"},
+     {CarDirection::TurnSlightRight, "TurnSlightRight"},
+     {CarDirection::TurnLeft, "TurnLeft"},
+     {CarDirection::TurnSharpLeft, "TurnSharpLeft"},
+     {CarDirection::TurnSlightLeft, "TurnSlightLeft"},
+     {CarDirection::UTurnLeft, "UTurnLeft"},
+     {CarDirection::UTurnRight, "UTurnRight"},
+     {CarDirection::TakeTheExit, "TakeTheExit"},
+     {CarDirection::EnterRoundAbout, "EnterRoundAbout"},
+     {CarDirection::LeaveRoundAbout, "LeaveRoundAbout"},
+     {CarDirection::StayOnRoundAbout, "StayOnRoundAbout"},
+     {CarDirection::StartAtEndOfStreet, "StartAtEndOfStreet"},
+     {CarDirection::ReachedYourDestination, "ReachedYourDestination"}}};
+static_assert(g_turnNames.size() == static_cast<size_t>(CarDirection::Count),
               "Check the size of g_turnNames");
 }  // namespace
 
 namespace routing
 {
+// UniNodeId -------------------------------------------------------------------
+std::atomic<NodeID> UniNodeId::m_nextFakeId(0);
+
+UniNodeId::UniNodeId(FeatureID const & featureId, uint32_t startSegId, uint32_t endSegId,
+                     bool forward)
+  : m_type(Type::Mwm)
+  , m_featureId(featureId)
+  , m_startSegId(startSegId)
+  , m_endSegId(endSegId)
+  , m_forward(forward)
+{
+  if (!m_featureId.IsValid())
+  {
+    m_nodeId = m_nextFakeId++;
+    CHECK_NOT_EQUAL(m_nodeId, SPECIAL_NODEID, ());
+  }
+}
+
+bool UniNodeId::operator==(UniNodeId const & rhs) const
+{
+  if (m_type != rhs.m_type)
+    return false;
+
+  switch (m_type)
+  {
+  case Type::Osrm: return m_nodeId == rhs.m_nodeId;
+  case Type::Mwm:
+    return m_featureId == rhs.m_featureId && m_startSegId == rhs.m_startSegId &&
+           m_endSegId == rhs.m_endSegId && m_forward == rhs.m_forward && m_nodeId == rhs.m_nodeId;
+  }
+}
+
+bool UniNodeId::operator<(UniNodeId const & rhs) const
+{
+  if (m_type != rhs.m_type)
+    return m_type < rhs.m_type;
+
+  switch (m_type)
+  {
+  case Type::Osrm: return m_nodeId < rhs.m_nodeId;
+  case Type::Mwm:
+    if (m_featureId != rhs.m_featureId)
+      return m_featureId < rhs.m_featureId;
+
+    if (m_startSegId != rhs.m_startSegId)
+      return m_startSegId < rhs.m_startSegId;
+
+    if (m_endSegId != rhs.m_endSegId)
+      return m_endSegId < rhs.m_endSegId;
+
+    if (m_forward != rhs.m_forward)
+      return m_forward < rhs.m_forward;
+
+    return m_nodeId < rhs.m_nodeId;
+  }
+}
+
+void UniNodeId::Clear()
+{
+  m_featureId = FeatureID();
+  m_startSegId = 0;
+  m_endSegId = 0;
+  m_forward = true;
+  m_nodeId = SPECIAL_NODEID;
+}
+
+uint32_t UniNodeId::GetNodeId() const
+{
+  ASSERT_EQUAL(m_type, Type::Osrm, ());
+  return m_nodeId;
+}
+
+FeatureID const & UniNodeId::GetFeature() const
+{
+  ASSERT_EQUAL(m_type, Type::Mwm, ());
+  return m_featureId;
+}
+
+bool UniNodeId::IsCorrect() const
+{
+  return m_type == Type::Mwm &&
+         ((m_forward && m_startSegId <= m_endSegId) || (!m_forward && m_endSegId <= m_startSegId));
+}
+
+string DebugPrint(UniNodeId::Type type)
+{
+  switch (type)
+  {
+  case UniNodeId::Type::Osrm: return "Osrm";
+  case UniNodeId::Type::Mwm: return "Mwm";
+  }
+}
+
 namespace turns
 {
-
+// SingleLaneInfo --------------------------------------------------------------
 bool SingleLaneInfo::operator==(SingleLaneInfo const & other) const
 {
   return m_lane == other.m_lane && m_isRecommended == other.m_isRecommended;
@@ -79,7 +175,7 @@ string DebugPrint(TurnItemDist const & turnItemDist)
   return out.str();
 }
 
-string const GetTurnString(TurnDirection turn)
+string const GetTurnString(CarDirection turn)
 {
   for (auto const & p : g_turnNames)
   {
@@ -88,82 +184,84 @@ string const GetTurnString(TurnDirection turn)
   }
 
   stringstream out;
-  out << "unknown TurnDirection (" << static_cast<int>(turn) << ")";
+  out << "unknown CarDirection (" << static_cast<int>(turn) << ")";
   return out.str();
 }
 
-bool IsLeftTurn(TurnDirection t)
+bool IsLeftTurn(CarDirection t)
 {
-  return (t >= TurnDirection::TurnLeft && t <= TurnDirection::TurnSlightLeft);
+  return (t >= CarDirection::TurnLeft && t <= CarDirection::TurnSlightLeft);
 }
 
-bool IsRightTurn(TurnDirection t)
+bool IsRightTurn(CarDirection t)
 {
-  return (t >= TurnDirection::TurnRight && t <= TurnDirection::TurnSlightRight);
+  return (t >= CarDirection::TurnRight && t <= CarDirection::TurnSlightRight);
 }
 
-bool IsLeftOrRightTurn(TurnDirection t)
+bool IsLeftOrRightTurn(CarDirection t)
 {
   return IsLeftTurn(t) || IsRightTurn(t);
 }
 
-bool IsStayOnRoad(TurnDirection t)
+bool IsStayOnRoad(CarDirection t)
 {
-  return (t == TurnDirection::GoStraight || t == TurnDirection::StayOnRoundAbout);
+  return (t == CarDirection::GoStraight || t == CarDirection::StayOnRoundAbout);
 }
 
-bool IsGoStraightOrSlightTurn(TurnDirection t)
+bool IsGoStraightOrSlightTurn(CarDirection t)
 {
-  return (t == TurnDirection::GoStraight || t == TurnDirection::TurnSlightLeft ||
-          t == TurnDirection::TurnSlightRight);
+  return (t == CarDirection::GoStraight || t == CarDirection::TurnSlightLeft ||
+          t == CarDirection::TurnSlightRight);
 }
 
-bool IsLaneWayConformedTurnDirection(LaneWay l, TurnDirection t)
+bool IsLaneWayConformedTurnDirection(LaneWay l, CarDirection t)
 {
   switch (t)
   {
     default:
       return false;
-    case TurnDirection::GoStraight:
+    case CarDirection::GoStraight:
       return l == LaneWay::Through;
-    case TurnDirection::TurnRight:
+    case CarDirection::TurnRight:
       return l == LaneWay::Right;
-    case TurnDirection::TurnSharpRight:
+    case CarDirection::TurnSharpRight:
       return l == LaneWay::SharpRight;
-    case TurnDirection::TurnSlightRight:
+    case CarDirection::TurnSlightRight:
       return l == LaneWay::SlightRight;
-    case TurnDirection::TurnLeft:
+    case CarDirection::TurnLeft:
       return l == LaneWay::Left;
-    case TurnDirection::TurnSharpLeft:
+    case CarDirection::TurnSharpLeft:
       return l == LaneWay::SharpLeft;
-    case TurnDirection::TurnSlightLeft:
+    case CarDirection::TurnSlightLeft:
       return l == LaneWay::SlightLeft;
-    case TurnDirection::UTurn:
+    case CarDirection::UTurnLeft:
+    case CarDirection::UTurnRight:
       return l == LaneWay::Reverse;
   }
 }
 
-bool IsLaneWayConformedTurnDirectionApproximately(LaneWay l, TurnDirection t)
+bool IsLaneWayConformedTurnDirectionApproximately(LaneWay l, CarDirection t)
 {
   switch (t)
   {
     default:
       return false;
-    case TurnDirection::GoStraight:
+    case CarDirection::GoStraight:
       return l == LaneWay::Through || l == LaneWay::SlightRight || l == LaneWay::SlightLeft;
-    case TurnDirection::TurnRight:
+    case CarDirection::TurnRight:
       return l == LaneWay::Right || l == LaneWay::SharpRight || l == LaneWay::SlightRight;
-    case TurnDirection::TurnSharpRight:
+    case CarDirection::TurnSharpRight:
       return l == LaneWay::SharpRight || l == LaneWay::Right;
-    case TurnDirection::TurnSlightRight:
+    case CarDirection::TurnSlightRight:
       return l == LaneWay::SlightRight || l == LaneWay::Through || l == LaneWay::Right;
-    case TurnDirection::TurnLeft:
+    case CarDirection::TurnLeft:
       return l == LaneWay::Left || l == LaneWay::SlightLeft || l == LaneWay::SharpLeft;
-    case TurnDirection::TurnSharpLeft:
+    case CarDirection::TurnSharpLeft:
       return l == LaneWay::SharpLeft || l == LaneWay::Left;
-    case TurnDirection::TurnSlightLeft:
+    case CarDirection::TurnSlightLeft:
       return l == LaneWay::SlightLeft || l == LaneWay::Through || l == LaneWay::Left;
-    case TurnDirection::UTurn:
+    case CarDirection::UTurnLeft:
+    case CarDirection::UTurnRight:
       return l == LaneWay::Reverse;
   }
 }
@@ -239,7 +337,7 @@ string DebugPrint(LaneWay const l)
   return it->second;
 }
 
-string DebugPrint(TurnDirection const turn)
+string DebugPrint(CarDirection const turn)
 {
   stringstream out;
   out << "[ " << GetTurnString(turn) << " ]";
@@ -273,6 +371,12 @@ string DebugPrint(SingleLaneInfo const & singleLaneInfo)
   out << "SingleLaneInfo [ m_isRecommended == " << singleLaneInfo.m_isRecommended
       << ", m_lane == " << ::DebugPrint(singleLaneInfo.m_lane) << " ]" << endl;
   return out.str();
+}
+
+double PiMinusTwoVectorsAngle(m2::PointD const & junctionPoint, m2::PointD const & ingoingPoint,
+                              m2::PointD const & outgoingPoint)
+{
+  return math::pi - ang::TwoVectorsAngle(junctionPoint, ingoingPoint, outgoingPoint);
 }
 }  // namespace turns
 }  // namespace routing

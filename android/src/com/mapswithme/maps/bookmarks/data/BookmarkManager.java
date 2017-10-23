@@ -1,60 +1,32 @@
 package com.mapswithme.maps.bookmarks.data;
 
-import android.util.Pair;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import com.mapswithme.maps.R;
 import com.mapswithme.util.statistics.Statistics;
-
-import java.util.Arrays;
-import java.util.List;
 
 public enum BookmarkManager
 {
   INSTANCE;
 
-  private static final Icon[] ICONS = {
-      new Icon("placemark-red", "placemark-red", R.drawable.color_picker_red_off, R.drawable.icon_bookmark_red),
-      new Icon("placemark-blue", "placemark-blue", R.drawable.color_picker_blue_off, R.drawable.icon_bookmark_blue),
-      new Icon("placemark-purple", "placemark-purple", R.drawable.color_picker_purple_off, R.drawable.icon_bookmark_purple),
-      new Icon("placemark-yellow", "placemark-yellow", R.drawable.color_picker_yellow_off, R.drawable.icon_bookmark_yellow),
-      new Icon("placemark-pink", "placemark-pink", R.drawable.color_picker_pink_off, R.drawable.icon_bookmark_pink),
-      new Icon("placemark-brown", "placemark-brown", R.drawable.color_picker_brown_off, R.drawable.icon_bookmark_brown),
-      new Icon("placemark-green", "placemark-green", R.drawable.color_picker_green_off, R.drawable.icon_bookmark_green),
-      new Icon("placemark-orange", "placemark-orange", R.drawable.color_picker_orange_off, R.drawable.icon_bookmark_orange)
-  };
+  public static final List<Icon> ICONS = new ArrayList<>();
 
-  BookmarkManager()
+  static
   {
-    loadBookmarks();
+    ICONS.add(new Icon("placemark-red", "placemark-red", R.drawable.ic_bookmark_marker_red_off, R.drawable.ic_bookmark_marker_red_on));
+    ICONS.add(new Icon("placemark-blue", "placemark-blue", R.drawable.ic_bookmark_marker_blue_off, R.drawable.ic_bookmark_marker_blue_on));
+    ICONS.add(new Icon("placemark-purple", "placemark-purple", R.drawable.ic_bookmark_marker_purple_off, R.drawable.ic_bookmark_marker_purple_on));
+    ICONS.add(new Icon("placemark-yellow", "placemark-yellow", R.drawable.ic_bookmark_marker_yellow_off, R.drawable.ic_bookmark_marker_yellow_on));
+    ICONS.add(new Icon("placemark-pink", "placemark-pink", R.drawable.ic_bookmark_marker_pink_off, R.drawable.ic_bookmark_marker_pink_on));
+    ICONS.add(new Icon("placemark-brown", "placemark-brown", R.drawable.ic_bookmark_marker_brown_off, R.drawable.ic_bookmark_marker_brown_on));
+    ICONS.add(new Icon("placemark-green", "placemark-green", R.drawable.ic_bookmark_marker_green_off, R.drawable.ic_bookmark_marker_green_on));
+    ICONS.add(new Icon("placemark-orange", "placemark-orange", R.drawable.ic_bookmark_marker_orange_off, R.drawable.ic_bookmark_marker_orange_on));
+    ICONS.add(new Icon("placemark-hotel", "placemark-hotel", R.drawable.ic_bookmark_marker_hotel_off, R.drawable.ic_bookmark_marker_hotel_on));
   }
-
-  private native void loadBookmarks();
-
-  public void deleteBookmark(Bookmark bmk)
-  {
-    deleteBookmark(bmk.getCategoryId(), bmk.getBookmarkId());
-  }
-
-  public void deleteTrack(Track track)
-  {
-    nativeDeleteTrack(track.getCategoryId(), track.getTrackId());
-  }
-
-  private native void nativeDeleteTrack(int cat, int trk);
-
-  private native void deleteBookmark(int c, int b);
-
-  public BookmarkCategory getCategoryById(int id)
-  {
-    if (id < getCategoriesCount())
-      return new BookmarkCategory(id);
-    else
-      return null;
-  }
-
-  public native int getCategoriesCount();
-
-  public native boolean deleteCategory(int index);
 
   public static Icon getIconByType(String type)
   {
@@ -64,51 +36,74 @@ public enum BookmarkManager
         return icon;
     }
     // return default icon
-    return ICONS[0];
+    return ICONS.get(0);
   }
 
-  public void toggleCategoryVisibility(int index)
+  public void deleteBookmark(Bookmark bmk)
   {
-    BookmarkCategory category = getCategoryById(index);
-    if (category != null)
-      category.setVisibility(!category.isVisible());
+    nativeDeleteBookmark(bmk.getCategoryId(), bmk.getBookmarkId());
   }
 
-  public static List<Icon> getIcons()
+  public void deleteTrack(Track track)
   {
-    return Arrays.asList(ICONS);
+    nativeDeleteTrack(track.getCategoryId(), track.getTrackId());
   }
 
-  public Bookmark getBookmark(Pair<Integer, Integer> catAndBmk)
+  public @NonNull BookmarkCategory getCategory(int catId)
   {
-    return getBookmark(catAndBmk.first, catAndBmk.second);
+    if (catId < nativeGetCategoriesCount())
+      return new BookmarkCategory(catId);
+
+    throw new IndexOutOfBoundsException("Invalid category ID!");
   }
 
-  public Bookmark getBookmark(int cat, int bmk)
+  public void toggleCategoryVisibility(int catId)
   {
-    return getCategoryById(cat).getBookmark(bmk);
+    BookmarkCategory category = getCategory(catId);
+    category.setVisibility(!category.isVisible());
   }
 
-  public Pair<Integer, Integer> addNewBookmark(String name, double lat, double lon)
+  public Bookmark getBookmark(int catId, int bmkId)
   {
-    final int cat = getLastEditedCategory();
-    final int bmk = addBookmarkToLastEditedCategory(name, lat, lon);
+    return getCategory(catId).getBookmark(bmkId);
+  }
+
+  public Bookmark addNewBookmark(String name, double lat, double lon)
+  {
+    final Bookmark bookmark = nativeAddBookmarkToLastEditedCategory(name, lat, lon);
     Statistics.INSTANCE.trackBookmarkCreated();
-
-    return new Pair<>(cat, bmk);
+    return bookmark;
   }
 
-  public native int createCategory(String name);
+  public static native void nativeLoadBookmarks();
 
-  public native void showBookmarkOnMap(int c, int b);
+  private native void nativeDeleteTrack(int catId, int trackId);
 
-  public native String saveToKmzFile(int catId, String tmpPath);
+  private native void nativeDeleteBookmark(int cat, int bmkId);
 
-  public native int addBookmarkToLastEditedCategory(String name, double lat, double lon);
+  public native int nativeGetCategoriesCount();
 
-  public native int getLastEditedCategory();
+  public native boolean nativeDeleteCategory(int catId);
 
-  public static native String generateUniqueBookmarkName(String baseName);
+  /**
+   * @return category Id
+   */
+  public native int nativeCreateCategory(String name);
 
-  public static native boolean loadKmzFile(String path);
+  public native void nativeShowBookmarkOnMap(int catId, int bmkId);
+
+  /**
+   * @return null, if wrong category is passed.
+   */
+  public native @Nullable String nativeSaveToKmzFile(int catId, String tmpPath);
+
+  public native Bookmark nativeAddBookmarkToLastEditedCategory(String name, double lat, double lon);
+
+  public native int nativeGetLastEditedCategory();
+
+  public static native String nativeGenerateUniqueFileName(String baseName);
+
+  public static native boolean nativeLoadKmzFile(String path);
+
+  public static native String nativeFormatNewBookmarkName();
 }

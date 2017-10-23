@@ -23,12 +23,10 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
 {
   LOG(LDEBUG, ("ID:", [self hash], "Connection is destroyed"));
   [m_connection cancel];
-  [m_connection release];
 #ifdef OMIM_OS_IPHONE
   [downloadIndicator enableStandby];
   [downloadIndicator disableDownloadIndicator];
 #endif
-  [super dealloc];
 }
 
 - (void) cancel
@@ -48,7 +46,7 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
 	m_expectedSize = size;
 
 	NSMutableURLRequest * request = [NSMutableURLRequest requestWithURL:
-			[NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]]
+			static_cast<NSURL *>([NSURL URLWithString:@(url.c_str())])
 			cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:TIMEOUT_IN_SECONDS];
 
 	// use Range header only if we don't download whole file from start
@@ -66,7 +64,6 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
 			val = [[NSString alloc] initWithFormat: @"bytes=%qi-", beg];
 		}
 		[request addValue:val forHTTPHeaderField:@"Range"];
-		[val release];
 	}
 
 	if (!pb.empty())
@@ -80,7 +77,7 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
 	if (url.find("mapswithme.com") != string::npos)
 	{
 		static string const uid = GetPlatform().UniqueClientId();
-		[request addValue:[NSString stringWithUTF8String: uid.c_str()] forHTTPHeaderField:@"User-Agent"];
+		[request addValue:@(uid.c_str()) forHTTPHeaderField:@"User-Agent"];
 	}
 
 #ifdef OMIM_OS_IPHONE
@@ -94,7 +91,6 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
   if (m_connection == 0)
   {
     LOG(LERROR, ("Can't create connection for", url));
-    [self release];
     return nil;
   }
   else
@@ -115,8 +111,9 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
     return request;
   }
   // In all other cases we are cancelling redirects
-  LOG(LWARNING, ("Canceling because of redirect from", [[[redirectResponse URL] absoluteString] UTF8String],
-      "to", [[[request URL] absoluteString] UTF8String]));
+  LOG(LWARNING,
+      ("Canceling because of redirect from", redirectResponse.URL.absoluteString.UTF8String, "to",
+       request.URL.absoluteString.UTF8String));
   [connection cancel];
   m_callback->OnFinish(-3, m_begRange, m_endRange);
   return nil;
@@ -188,7 +185,11 @@ static id<DownloadIndicatorProtocol> downloadIndicator = nil;
   UNUSED_VALUE(connection);
   int64_t const length = [data length];
   m_downloadedBytes += length;
-  m_callback->OnWrite(m_begRange + m_downloadedBytes - length, [data bytes], length);
+  if(!m_callback->OnWrite(m_begRange + m_downloadedBytes - length, [data bytes], length))
+  {
+    [m_connection cancel];
+    m_callback->OnFinish(-1, m_begRange, m_endRange);
+  }
 }
 
 - (void) connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
@@ -216,13 +217,15 @@ HttpThread * CreateNativeHttpThread(string const & url,
                                     int64_t size,
                                     string const & pb)
 {
-  return [[HttpThread alloc] initWith:url callback:cb begRange:beg endRange:end expectedSize:size postBody:pb];
+  HttpThread * request = [[HttpThread alloc] initWith:url callback:cb begRange:beg endRange:end expectedSize:size postBody:pb];
+  CFRetain(reinterpret_cast<void *>(request));
+  return request;
 }
 
 void DeleteNativeHttpThread(HttpThread * request)
 {
   [request cancel];
-  [request release];
+  CFRelease(reinterpret_cast<void *>(request));
 }
 
 } // namespace downloader

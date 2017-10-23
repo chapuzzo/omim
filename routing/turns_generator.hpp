@@ -1,9 +1,16 @@
 #pragma once
 
+#include "routing/loaded_path_segment.hpp"
 #include "routing/osrm2feature_map.hpp"
 #include "routing/osrm_engine.hpp"
+#include "routing/routing_result_graph.hpp"
 #include "routing/route.hpp"
+#include "routing/router.hpp"
 #include "routing/turns.hpp"
+#include "routing/turn_candidate.hpp"
+#include "routing/segment.hpp"
+
+#include "traffic/traffic_info.hpp"
 
 #include "std/function.hpp"
 #include "std/utility.hpp"
@@ -29,35 +36,36 @@ namespace turns
 using TGetIndexFunction = function<size_t(pair<size_t, size_t>)>;
 
 /*!
- * \brief The TurnInfo struct is an accumulator for all junction information.
- * During a junction (a turn) analysis a different subsets of fields in the structure
- * may be calculated. The main purpose of TurnInfo is to prevent recalculation the same fields.
- * The idea is if a field is required to check whether a field has been calculated.
- * If yes, just use it. If not, the field should be calculated, kept in the structure
- * and used.
+ * \brief Compute turn and time estimation structs for the abstract route result.
+ * \param routingResult abstract routing result to annotate.
+ * \param delegate Routing callbacks delegate.
+ * \param points Storage for unpacked points of the path.
+ * \param turnsDir output turns annotation storage.
+ * \param streets output street names along the path.
+ * \param traffic road traffic information.
+ * \return routing operation result code.
+ */
+IRouter::ResultCode MakeTurnAnnotation(turns::IRoutingResult const & result,
+                                       RouterDelegate const & delegate, vector<Junction> & points,
+                                       Route::TTurns & turnsDir, Route::TStreets & streets,
+                                       vector<Segment> & segments);
+
+/*!
+ * \brief The TurnInfo struct is a representation of a junction.
+ * It has ingoing and outgoing edges and method to check if these edges are valid.
  */
 struct TurnInfo
 {
-  RoutingMapping & m_routeMapping;
+  LoadedPathSegment const & m_ingoing;
+  LoadedPathSegment const & m_outgoing;
 
-  NodeID m_ingoingNodeID;
-  OsrmMappingTypes::FtSeg m_ingoingSegment;
-  ftypes::HighwayClass m_ingoingHighwayClass;
-  bool m_isIngoingEdgeRoundabout;
-
-  NodeID m_outgoingNodeID;
-  OsrmMappingTypes::FtSeg m_outgoingSegment;
-  ftypes::HighwayClass m_outgoingHighwayClass;
-  bool m_isOutgoingEdgeRoundabout;
-
-  TurnInfo(RoutingMapping & routeMapping, NodeID ingoingNodeID, NodeID outgoingNodeID);
+  TurnInfo(LoadedPathSegment const & ingoingSegment, LoadedPathSegment const & outgoingSegment)
+    : m_ingoing(ingoingSegment), m_outgoing(outgoingSegment)
+  {
+  }
 
   bool IsSegmentsValid() const;
 };
-
-size_t GetLastSegmentPointIndex(pair<size_t, size_t> const & p);
-vector<SingleLaneInfo> GetLanesInfo(NodeID node, RoutingMapping const & routingMapping,
-                                    TGetIndexFunction GetIndex, Index const & index);
 
 // Returns the distance in meractor units for the path of points for the range [startPointIndex, endPointIndex].
 double CalculateMercatorDistanceAlongPath(uint32_t startPointIndex, uint32_t endPointIndex,
@@ -67,24 +75,24 @@ double CalculateMercatorDistanceAlongPath(uint32_t startPointIndex, uint32_t end
  * \brief Selects lanes which are recommended for an end user.
  */
 void SelectRecommendedLanes(Route::TTurns & turnsDir);
-void FixupTurns(vector<m2::PointD> const & points, Route::TTurns & turnsDir);
+void FixupTurns(vector<Junction> const & points, Route::TTurns & turnsDir);
 inline size_t GetFirstSegmentPointIndex(pair<size_t, size_t> const & p) { return p.first; }
 
-TurnDirection InvertDirection(TurnDirection dir);
+CarDirection InvertDirection(CarDirection dir);
 
 /*!
  * \param angle is an angle of a turn. It belongs to a range [-180, 180].
  * \return correct direction if the route follows along the rightmost possible way.
  */
-TurnDirection RightmostDirection(double angle);
-TurnDirection LeftmostDirection(double angle);
+CarDirection RightmostDirection(double angle);
+CarDirection LeftmostDirection(double angle);
 
 /*!
  * \param angle is an angle of a turn. It belongs to a range [-180, 180].
  * \return correct direction if the route follows not along one of two outermost ways
  * or if there is only one possible way.
  */
-TurnDirection IntermediateDirection(double angle);
+CarDirection IntermediateDirection(double angle);
 
 /*!
  * \return Returns true if the route enters a roundabout.
@@ -114,7 +122,7 @@ bool CheckRoundaboutExit(bool isIngoingEdgeRoundabout, bool isOutgoingEdgeRounda
  *   (b) and there is a way(s) besides outgoing edge to leave the junction (the roundabout)
  *       but it is (they are) relevantly small.
  */
-TurnDirection GetRoundaboutDirection(bool isIngoingEdgeRoundabout, bool isOutgoingEdgeRoundabout,
+CarDirection GetRoundaboutDirection(bool isIngoingEdgeRoundabout, bool isOutgoingEdgeRoundabout,
                                      bool isMultiTurnJunction, bool keepTurnByHighwayClass);
 
 /*!
@@ -122,7 +130,15 @@ TurnDirection GetRoundaboutDirection(bool isIngoingEdgeRoundabout, bool isOutgoi
  * \param turnInfo is used for cashing some information while turn calculation.
  * \param turn is used for keeping the result of turn calculation.
  */
-void GetTurnDirection(Index const & index, turns::TurnInfo & turnInfo, TurnItem & turn);
+void GetTurnDirection(IRoutingResult const & result, turns::TurnInfo & turnInfo, TurnItem & turn);
 
+/*!
+ * \brief Finds an U-turn that starts from master segment and returns how many segments it lasts.
+ * \returns an index in |segments| that has the opposite direction with master segment
+ * (|segments[currentSegment - 1]|) and 0 if there is no UTurn.
+ * \warning |currentSegment| must be greater than 0.
+ */
+size_t CheckUTurnOnRoute(TUnpackedPathSegments const & segments,
+                         size_t currentSegment, TurnItem & turn);
 }  // namespace routing
 }  // namespace turns

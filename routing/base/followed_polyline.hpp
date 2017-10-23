@@ -1,9 +1,11 @@
 #pragma once
 
-#include "indexer/mercator.hpp"
+#include "geometry/mercator.hpp"
 
 #include "geometry/point2d.hpp"
 #include "geometry/polyline2d.hpp"
+
+#include <vector>
 
 namespace routing
 {
@@ -16,21 +18,39 @@ public:
     : m_poly(begin, end)
   {
     Update();
+    // Initially we do not have intermediate points. Next checkpoint is finish.
+    m_nextCheckpointIndex = m_segProj.size();
   }
+
+  void SetNextCheckpointIndex(size_t index) { m_nextCheckpointIndex = index; }
 
   void Swap(FollowedPolyline & rhs);
 
-  bool IsValid() const { return (m_current.IsValid() && m_poly.GetSize() > 1); }
+  void Append(FollowedPolyline const & poly)
+  {
+    m_poly.Append(poly.m_poly);
+    Update();
+  }
 
+  void PopBack()
+  {
+    m_poly.PopBack();
+    Update();
+  }
+
+  bool IsValid() const { return (m_current.IsValid() && m_poly.GetSize() > 1); }
   m2::PolylineD const & GetPolyline() const { return m_poly; }
 
-  double GetTotalDistanceM() const;
-  double GetDistanceFromBeginM() const;
-  double GetDistanceToEndM() const;
+  std::vector<double> const & GetSegDistanceMeters() const { return m_segDistance; }
+  double GetTotalDistanceMeters() const;
+  double GetDistanceFromStartMeters() const;
+  double GetDistanceToEndMeters() const;
+  double GetDistFromCurPointToRoutePointMerc() const;
+  double GetDistFromCurPointToRoutePointMeters() const;
   double GetMercatorDistanceFromBegin() const;
 
   /*! \brief Return next navigation point for direction widgets.
-   *  Returns first geomety point from the polyline after your location if it is farther then
+   *  Returns first geometry point from the polyline after your location if it is farther then
    *  toleranceM.
    */
   void GetCurrentDirectionPoint(m2::PointD & pt, double toleranceM) const;
@@ -40,10 +60,11 @@ public:
     m2::PointD m_pt;
     size_t m_ind;
 
-    Iter(m2::PointD pt, size_t ind) : m_pt(pt), m_ind(ind) {}
-    Iter() : m_ind(-1) {}
+    static size_t constexpr kInvalidIndex = std::numeric_limits<size_t>::max();
 
-    bool IsValid() const { return m_ind != -1; }
+    Iter(m2::PointD pt, size_t ind) : m_pt(pt), m_ind(ind) {}
+    Iter() : m_ind(kInvalidIndex) {}
+    bool IsValid() const { return m_ind != kInvalidIndex; }
   };
 
   const Iter GetCurrentIter() const { return m_current; }
@@ -59,7 +80,15 @@ public:
 
 private:
   template <class DistanceFn>
-  Iter GetClosestProjection(m2::RectD const & posRect, DistanceFn const & distFn) const;
+  Iter GetClosestProjectionInInterval(m2::RectD const & posRect, DistanceFn const & distFn,
+                                      size_t startIdx, size_t endIdx) const;
+
+  /// \returns iterator to the best projection of center of |posRect| to the |m_poly|.
+  /// If there's a good projection of center of |posRect| to two closest segments of |m_poly|
+  /// after |m_current| the iterator corresponding of the projection is returned.
+  /// Otherwise returns a projection to closest point of route.
+  template <class DistanceFn>
+  Iter GetBestProjection(m2::RectD const & posRect, DistanceFn const & distFn) const;
 
   void Update();
 
@@ -67,10 +96,11 @@ private:
 
   /// Iterator with the current position. Position sets with UpdateProjection methods.
   mutable Iter m_current;
+  size_t m_nextCheckpointIndex;
   /// Precalculated info for fast projection finding.
-  vector<m2::ProjectionToSection<m2::PointD>> m_segProj;
+  std::vector<m2::ProjectionToSection<m2::PointD>> m_segProj;
   /// Accumulated cache of segments length in meters.
-  vector<double> m_segDistance;
+  std::vector<double> m_segDistance;
 };
 
 }  // namespace routing

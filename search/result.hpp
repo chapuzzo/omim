@@ -1,5 +1,9 @@
 #pragma once
+#include "search/ranking_info.hpp"
+
 #include "indexer/feature_decl.hpp"
+
+#include "editor/yes_no_unknown.hpp"
 
 #include "geometry/point2d.hpp"
 #include "geometry/rect2d.hpp"
@@ -11,7 +15,6 @@
 
 namespace search
 {
-
 // Search result. Search returns a list of them, ordered by score.
 class Result
 {
@@ -20,7 +23,6 @@ public:
   {
     RESULT_FEATURE,
     RESULT_LATLON,
-    RESULT_ADDRESS,
     RESULT_SUGGEST_PURE,
     RESULT_SUGGEST_FROM_FEATURE
   };
@@ -28,24 +30,26 @@ public:
   /// Metadata for search results. Considered valid if m_resultType == RESULT_FEATURE.
   struct Metadata
   {
-    string m_cuisine;         // Valid only if not empty. Used for restaurants.
-    int m_stars = 0;          // Valid only if not 0. Used for hotels.
-    bool m_isClosed = false;  // Valid for any result.
+    string m_cuisine;                              // Valid only if not empty. Used for restaurants.
 
-    /// True if the struct is already assigned or need to be calculated otherwise.
+    // Following fields are used for hotels only.
+    string m_hotelApproximatePricing;
+    string m_hotelRating;
+    int m_stars = 0;
+    bool m_isSponsoredHotel = false;
+    bool m_isHotel = false;
+
+    osm::YesNoUnknown m_isOpenNow = osm::Unknown;  // Valid for any result.
+
     bool m_isInitialized = false;
   };
 
   /// For RESULT_FEATURE.
-  Result(FeatureID const & id, m2::PointD const & pt, string const & str, string const & region,
+  Result(FeatureID const & id, m2::PointD const & pt, string const & str, string const & address,
          string const & type, uint32_t featureType, Metadata const & meta);
 
-  /// Used for generation viewport results.
-  Result(FeatureID const & id, m2::PointD const & pt, string const & str, string const & type);
-
-  /// @param[in] type Empty string - RESULT_LATLON, building address otherwise.
-  Result(m2::PointD const & pt, string const & str,
-         string const & region, string const & type);
+  /// For RESULT_LATLON.
+  Result(m2::PointD const & pt, string const & latlon, string const & address);
 
   /// For RESULT_SUGGESTION_PURE.
   Result(string const & str, string const & suggest);
@@ -55,13 +59,16 @@ public:
 
   /// Strings that is displayed in the GUI.
   //@{
-  char const * GetString() const { return m_str.c_str(); }
-  char const * GetRegionString() const { return m_region.c_str(); }
-  char const * GetFeatureType() const { return m_type.c_str(); }
-  char const * GetCuisine() const { return m_metadata.m_cuisine.c_str(); }
+  string const & GetString() const { return m_str; }
+  string const & GetAddress() const { return m_address; }
+  string const & GetFeatureType() const { return m_type; }
+  string const & GetCuisine() const { return m_metadata.m_cuisine; }
+  string const & GetHotelRating() const { return m_metadata.m_hotelRating; }
+  string const & GetHotelApproximatePricing() const { return m_metadata.m_hotelApproximatePricing; }
+  bool IsHotel() const { return m_metadata.m_isHotel; }
   //@}
 
-  bool IsClosed() const { return m_metadata.m_isClosed; }
+  osm::YesNoUnknown IsOpenNow() const { return m_metadata.m_isOpenNow; }
   int GetStarsCount() const { return m_metadata.m_stars; }
 
   bool IsSuggest() const;
@@ -72,7 +79,7 @@ public:
 
   /// Feature id in mwm.
   /// @precondition GetResultType() == RESULT_FEATURE
-  FeatureID GetFeatureID() const;
+  FeatureID const & GetFeatureID() const;
 
   /// Center point of a feature.
   /// @precondition HasPoint() == true
@@ -91,15 +98,35 @@ public:
 
   void AppendCity(string const & name);
 
-private:
-  void Init(bool metadataInitialized);
+  int32_t GetPositionInResults() const { return m_positionInResults; }
+  void SetPositionInResults(int32_t pos) { m_positionInResults = pos; }
 
+  inline RankingInfo const & GetRankingInfo() const { return m_info; }
+
+  template <typename TInfo>
+  inline void SetRankingInfo(TInfo && info)
+  {
+    m_info = forward<TInfo>(info);
+  }
+
+  // Returns a representation of this result that is
+  // sent to the statistics servers and later used to measure
+  // the quality of our search engine.
+  string ToStringForStats() const;
+
+private:
   FeatureID m_id;
   m2::PointD m_center;
-  string m_str, m_region, m_type;
+  string m_str, m_address, m_type;
   uint32_t m_featureType;
   string m_suggestionStr;
   buffer_vector<pair<uint16_t, uint16_t>, 4> m_hightlightRanges;
+
+  RankingInfo m_info;
+
+  // The position that this result occupied in the vector returned
+  // by a search query. -1 if undefined.
+  int32_t m_positionInResults = -1;
 
 public:
   Metadata m_metadata;
@@ -107,84 +134,95 @@ public:
 
 class Results
 {
-  vector<Result> m_vec;
-
-  enum StatusT
-  {
-    NONE,             // default status
-    ENDED_CANCELLED,  // search ended with canceling
-    ENDED             // search ended itself
-  };
-  StatusT m_status;
-
-  explicit Results(bool isCancelled)
-  {
-    m_status = (isCancelled ? ENDED_CANCELLED : ENDED);
-  }
-
 public:
-  Results() : m_status(NONE) {}
+  using Iter = vector<Result>::iterator;
+  using ConstIter = vector<Result>::const_iterator;
 
-  /// @name To implement end of search notification.
-  //@{
-  static Results GetEndMarker(bool isCancelled) { return Results(isCancelled); }
-  bool IsEndMarker() const { return (m_status != NONE); }
-  bool IsEndedNormal() const { return (m_status == ENDED); }
-  //@}
+  Results();
 
-  bool AddResult(Result && res);
-  /// Fast function that don't do any duplicates checks.
-  /// Used in viewport search only.
-  void AddResultNoChecks(Result && res)
+  inline bool IsEndMarker() const { return m_status != Status::None; }
+  inline bool IsEndedNormal() const { return m_status == Status::EndedNormal; }
+  inline bool IsEndedCancelled() const { return m_status == Status::EndedCancelled; }
+
+  void SetEndMarker(bool cancelled)
   {
-    m_vec.push_back(move(res));
+    m_status = cancelled ? Status::EndedCancelled : Status::EndedNormal;
   }
 
-  inline void Clear() { m_vec.clear(); }
+  bool AddResult(Result && result);
 
-  typedef vector<Result>::const_iterator IterT;
-  inline IterT Begin() const { return m_vec.begin(); }
-  inline IterT End() const { return m_vec.end(); }
+  // Fast version of AddResult() that doesn't do any duplicates checks.
+  void AddResultNoChecks(Result && result);
+  void AddResultsNoChecks(ConstIter first, ConstIter last);
 
-  inline size_t GetCount() const { return m_vec.size(); }
+  void Clear();
+
+  inline Iter begin() { return m_results.begin(); }
+  inline Iter end() { return m_results.end(); }
+  inline ConstIter begin() const { return m_results.cbegin(); }
+  inline ConstIter end() const { return m_results.cend(); }
+
+  inline size_t GetCount() const { return m_results.size(); }
   size_t GetSuggestsCount() const;
 
-  inline Result & GetResult(size_t i)
+  inline Result & operator[](size_t i)
   {
-    ASSERT_LESS(i, m_vec.size(), ());
-    return m_vec[i];
+    ASSERT_LESS(i, m_results.size(), ());
+    return m_results[i];
   }
 
-  inline Result const & GetResult(size_t i) const
+  inline Result const & operator[](size_t i) const
   {
-    ASSERT_LESS(i, m_vec.size(), ());
-    return m_vec[i];
+    ASSERT_LESS(i, m_results.size(), ());
+    return m_results[i];
   }
 
-  inline void Swap(Results & rhs)
+  inline void Swap(Results & rhs) { m_results.swap(rhs.m_results); }
+
+private:
+  enum class Status
   {
-    m_vec.swap(rhs.m_vec);
-  }
+    None,
+    EndedCancelled,
+    EndedNormal
+  };
+
+  // Inserts |result| in |m_results| at position denoted by |where|.
+  //
+  // *NOTE* all iterators, references and pointers to |m_results| are
+  // invalid after the call.
+  void InsertResult(vector<Result>::iterator where, Result && result);
+
+  vector<Result> m_results;
+  Status m_status;
 };
 
 struct AddressInfo
 {
   string m_country, m_city, m_street, m_house, m_name;
   vector<string> m_types;
-
-  void MakeFrom(search::Result const & res);
+  double m_distanceMeters = -1.0;
 
   string GetPinName() const;    // Caroline
   string GetPinType() const;    // shop
 
   string FormatPinText() const; // Caroline (clothes shop)
-  string FormatAddress() const; // 7 vulica Frunze, Belarus
   string FormatTypes() const;   // clothes shop
-  string FormatNameAndAddress() const;  // Caroline, 7 vulica Frunze, Belarus
   string GetBestType() const;
   bool IsEmptyName() const;
 
+  enum AddressType { DEFAULT, SEARCH_RESULT };
+  // 7 vulica Frunze
+  string FormatHouseAndStreet(AddressType type = DEFAULT) const;
+  // 7 vulica Frunze, Minsk, Belarus
+  string FormatAddress(AddressType type = DEFAULT) const;
+  // Caroline, 7 vulica Frunze, Minsk, Belarus
+  string FormatNameAndAddress(AddressType type = DEFAULT) const;
+
   void Clear();
+
+  friend string DebugPrint(AddressInfo const & info);
 };
 
-}
+string DebugPrint(search::Result const & result);
+}  // namespace search

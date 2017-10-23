@@ -26,13 +26,13 @@ class LocalFileGenerator
 public:
   LocalFileGenerator(string const & fileName)
       : m_countryFile(fileName),
-        m_testMapFile(m_countryFile.GetNameWithExt(MapOptions::Map), "map"),
-        m_testRoutingFile(m_countryFile.GetNameWithExt(MapOptions::CarRouting), "routing"),
-        m_localFile(GetPlatform().WritableDir(), m_countryFile, 0 /* version */)
+        m_testDataFile(platform::GetFileName(m_countryFile.GetName(), MapOptions::MapWithCarRouting,
+                                             version::FOR_TESTING_SINGLE_MWM1), "routing"),
+        m_localFile(GetPlatform().WritableDir(), m_countryFile, version::FOR_TESTING_SINGLE_MWM1)
   {
     m_localFile.SyncWithDisk();
     TEST(m_localFile.OnDisk(MapOptions::MapWithCarRouting), ());
-    GenerateVersionSections(m_localFile);
+    GenerateNecessarySections(m_localFile);
 
     m_result = m_testSet.Register(m_localFile);
     TEST_EQUAL(m_result.second, MwmSet::RegResult::Success,
@@ -41,26 +41,24 @@ public:
 
   TestMwmSet & GetMwmSet() { return m_testSet; }
 
-  string const & GetCountryName() { return m_countryFile.GetNameWithoutExt(); }
+  string const & GetCountryName() { return m_countryFile.GetName(); }
 
   size_t GetNumRefs() { return m_result.first.GetInfo()->GetNumRefs(); }
 
 private:
-  void GenerateVersionSections(LocalCountryFile const & localFile)
-  {
-    FilesContainerW routingCont(localFile.GetPath(MapOptions::CarRouting));
-    // Write version for routing file that is equal to correspondent mwm file.
-    FilesContainerW mwmCont(localFile.GetPath(MapOptions::Map));
 
-    FileWriter w1 = routingCont.GetWriter(VERSION_FILE_TAG);
-    FileWriter w2 = mwmCont.GetWriter(VERSION_FILE_TAG);
-    version::WriteVersion(w1, my::TodayAsYYMMDD());
-    version::WriteVersion(w2, my::TodayAsYYMMDD());
+  void GenerateNecessarySections(LocalCountryFile const & localFile)
+  {
+    FilesContainerW dataCont(localFile.GetPath(MapOptions::CarRouting));
+
+    FileWriter w1 = dataCont.GetWriter(VERSION_FILE_TAG);
+    version::WriteVersion(w1, my::SecondsSinceEpoch());
+    FileWriter w2 = dataCont.GetWriter(ROUTING_MATRIX_FILE_TAG);
+    w2.Write("smth", 4);
   }
 
   CountryFile m_countryFile;
-  ScopedFile m_testMapFile;
-  ScopedFile m_testRoutingFile;
+  ScopedFile m_testDataFile;
   LocalCountryFile m_localFile;
   TestMwmSet m_testSet;
   pair<MwmSet::MwmId, MwmSet::RegResult> m_result;
@@ -118,14 +116,10 @@ UNIT_TEST(FtSegSplitSegmentiTest)
   OsrmMappingTypes::FtSeg bseg(123, 5, 1);
   OsrmMappingTypes::FtSeg splitter(123, 2, 3);
 
-  OsrmMappingTypes::FtSeg res1(123, 2, 5);
-  TEST_EQUAL(res1, OsrmMappingTypes::SplitSegment(seg, splitter, false), ());
-  OsrmMappingTypes::FtSeg res2(123, 1, 3);
-  TEST_EQUAL(res2, OsrmMappingTypes::SplitSegment(seg, splitter, true), ());
+  OsrmMappingTypes::FtSeg res1(123, 1, 3);
+  TEST_EQUAL(res1, OsrmMappingTypes::SplitSegment(seg, splitter), ());
 
-  OsrmMappingTypes::FtSeg res3(123, 3, 1);
-  TEST_EQUAL(res3, OsrmMappingTypes::SplitSegment(bseg, splitter, false), ());
-  OsrmMappingTypes::FtSeg res4(123, 5, 2);
-  TEST_EQUAL(res4, OsrmMappingTypes::SplitSegment(bseg, splitter, true), ());
+  OsrmMappingTypes::FtSeg res2(123, 5, 2);
+  TEST_EQUAL(res2, OsrmMappingTypes::SplitSegment(bseg, splitter), ());
 }
 }  // namespace

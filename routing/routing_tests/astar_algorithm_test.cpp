@@ -1,6 +1,8 @@
 #include "testing/testing.hpp"
 
 #include "routing/base/astar_algorithm.hpp"
+#include "routing/base/routing_result.hpp"
+
 #include "std/map.hpp"
 #include "std/utility.hpp"
 #include "std/vector.hpp"
@@ -26,6 +28,7 @@ class UndirectedGraph
 public:
   using TVertexType = unsigned;
   using TEdgeType = Edge;
+  using TWeightType = double;
 
   void AddEdge(unsigned u, unsigned v, unsigned w)
   {
@@ -57,19 +60,21 @@ private:
   map<unsigned, vector<Edge>> m_adjs;
 };
 
-void TestAStar(UndirectedGraph const & graph, vector<unsigned> const & expectedRoute)
-{
-  using TAlgorithm = AStarAlgorithm<UndirectedGraph>;
+using TAlgorithm = AStarAlgorithm<UndirectedGraph>;
 
+void TestAStar(UndirectedGraph & graph, vector<unsigned> const & expectedRoute, double const & expectedDistance)
+{
   TAlgorithm algo;
 
-  vector<unsigned> actualRoute;
+  RoutingResult<unsigned /* VertexType */, double /* WeightType */> actualRoute;
   TEST_EQUAL(TAlgorithm::Result::OK, algo.FindPath(graph, 0u, 4u, actualRoute), ());
-  TEST_EQUAL(expectedRoute, actualRoute, ());
+  TEST_EQUAL(expectedRoute, actualRoute.m_path, ());
+  TEST_ALMOST_EQUAL_ULPS(expectedDistance, actualRoute.m_distance, ());
 
-  actualRoute.clear();
+  actualRoute.m_path.clear();
   TEST_EQUAL(TAlgorithm::Result::OK, algo.FindPathBidirectional(graph, 0u, 4u, actualRoute), ());
-  TEST_EQUAL(expectedRoute, actualRoute, ());
+  TEST_EQUAL(expectedRoute, actualRoute.m_path, ());
+  TEST_ALMOST_EQUAL_ULPS(expectedDistance, actualRoute.m_distance, ());
 }
 
 UNIT_TEST(AStarAlgorithm_Sample)
@@ -85,7 +90,71 @@ UNIT_TEST(AStarAlgorithm_Sample)
 
   vector<unsigned> const expectedRoute = {0, 1, 2, 3, 4};
 
-  TestAStar(graph, expectedRoute);
+  TestAStar(graph, expectedRoute, 23);
 }
 
+UNIT_TEST(AdjustRoute)
+{
+  UndirectedGraph graph;
+
+  for (unsigned int i = 0; i < 5; ++i)
+    graph.AddEdge(i /* from */, i + 1 /* to */, 1 /* weight */);
+
+  graph.AddEdge(6, 0, 1);
+  graph.AddEdge(6, 1, 1);
+  graph.AddEdge(6, 2, 1);
+
+  // Each edge contains {vertexId, weight}.
+  vector<Edge> const prevRoute = {{0, 0}, {1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}};
+
+  TAlgorithm algo;
+  RoutingResult<unsigned /* VertexType */, double /* WeightType */> result;
+  auto code = algo.AdjustRoute(graph, 6 /* start */, prevRoute, 1.0 /* limit */, result,
+                               my::Cancellable(), nullptr /* onVisitedVertexCallback */);
+
+  vector<unsigned> const expectedRoute = {6, 2, 3, 4, 5};
+  TEST_EQUAL(code, TAlgorithm::Result::OK, ());
+  TEST_EQUAL(result.m_path, expectedRoute, ());
+  TEST_EQUAL(result.m_distance, 4.0, ());
+}
+
+UNIT_TEST(AdjustRouteNoPath)
+{
+  UndirectedGraph graph;
+
+  for (unsigned int i = 0; i < 5; ++i)
+    graph.AddEdge(i /* from */, i + 1 /* to */, 1 /* weight */);
+
+  // Each edge contains {vertexId, weight}.
+  vector<Edge> const prevRoute = {{0, 0}, {1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}};
+
+  TAlgorithm algo;
+  RoutingResult<unsigned /* VertexType */, double /* WeightType */> result;
+  auto code = algo.AdjustRoute(graph, 6 /* start */, prevRoute, 1.0 /* limit */, result,
+                               my::Cancellable(), nullptr /* onVisitedVertexCallback */);
+
+  TEST_EQUAL(code, TAlgorithm::Result::NoPath, ());
+  TEST(result.m_path.empty(), ());
+}
+
+UNIT_TEST(AdjustRouteOutOfLimit)
+{
+  UndirectedGraph graph;
+
+  for (unsigned int i = 0; i < 5; ++i)
+    graph.AddEdge(i /* from */, i + 1 /* to */, 1 /* weight */);
+
+  graph.AddEdge(6, 2, 2);
+
+  // Each edge contains {vertexId, weight}.
+  vector<Edge> const prevRoute = {{0, 0}, {1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}};
+
+  TAlgorithm algo;
+  RoutingResult<unsigned /* VertexType */, double /* WeightType */> result;
+  auto code = algo.AdjustRoute(graph, 6 /* start */, prevRoute, 1.0 /* limit */, result,
+                               my::Cancellable(), nullptr /* onVisitedVertexCallback */);
+
+  TEST_EQUAL(code, TAlgorithm::Result::NoPath, ());
+  TEST(result.m_path.empty(), ());
+}
 }  // namespace routing_test

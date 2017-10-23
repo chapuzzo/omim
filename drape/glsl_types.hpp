@@ -2,6 +2,10 @@
 
 #include "geometry/point2d.hpp"
 
+#include "drape/color.hpp"
+
+#include "std/type_traits.hpp"
+
 #include <glm_config.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -54,11 +58,29 @@ inline vec2 ToVec2(m2::PointD const & pt)
   return glsl::vec2(pt.x, pt.y);
 }
 
+inline m2::PointD FromVec2(glsl::vec2 const & pt)
+{
+  return m2::PointD(pt.x, pt.y);
+}
+
+inline vec4 ToVec4(dp::Color const & color)
+{
+  return glsl::vec4(double(color.GetRed()) / 255,
+                    double(color.GetGreen()) / 255,
+                    double(color.GetBlue()) / 255,
+                    double(color.GetAlfa()) / 255);
+}
+
+template<typename T, class = typename enable_if<is_integral<T>::value || is_floating_point<T>::value>::type>
+inline uint8_t GetArithmeticComponentCount()
+{
+  return 1;
+}
+
 template <typename T>
 inline uint8_t GetComponentCount()
 {
-  ASSERT(false, ());
-  return 0;
+  return GetArithmeticComponentCount<T>();
 }
 
 template <>

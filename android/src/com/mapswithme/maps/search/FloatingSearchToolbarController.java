@@ -1,23 +1,31 @@
 package com.mapswithme.maps.search;
 
 import android.app.Activity;
+import android.support.annotation.Nullable;
 import android.text.TextUtils;
-import android.view.View;
-
 import com.mapswithme.maps.MwmActivity;
 import com.mapswithme.maps.api.ParsedMwmRequest;
 import com.mapswithme.maps.widget.SearchToolbarController;
+import com.mapswithme.util.Animations;
 import com.mapswithme.util.UiUtils;
 
 public class FloatingSearchToolbarController extends SearchToolbarController
 {
+  @Nullable
+  private VisibilityListener mVisibilityListener;
+
+  public interface VisibilityListener
+  {
+    void onSearchVisibilityChanged(boolean visible);
+  }
+
   public FloatingSearchToolbarController(Activity activity)
   {
     super(activity.getWindow().getDecorView(), activity);
   }
 
   @Override
-  protected void onUpClick()
+  public void onUpClick()
   {
     ((MwmActivity) mActivity).showSearch(getQuery());
     cancelSearchApiAndHide(true);
@@ -44,12 +52,28 @@ public class FloatingSearchToolbarController extends SearchToolbarController
 
     if (ParsedMwmRequest.hasRequest())
     {
-      UiUtils.appearSlidingDown(mToolbar, null);
+      Animations.appearSliding(mToolbar, Animations.TOP, new Runnable()
+      {
+        @Override
+        public void run()
+        {
+          if (mVisibilityListener != null)
+            mVisibilityListener.onSearchVisibilityChanged(true);
+        }
+      });
       setQuery(ParsedMwmRequest.getCurrentRequest().getTitle());
     }
     else if (!TextUtils.isEmpty(SearchEngine.getQuery()))
     {
-      UiUtils.appearSlidingDown(mToolbar, null);
+      Animations.appearSliding(mToolbar, Animations.TOP, new Runnable()
+      {
+        @Override
+        public void run()
+        {
+          if (mVisibilityListener != null)
+            mVisibilityListener.onSearchVisibilityChanged(true);
+        }
+      });
       setQuery(SearchEngine.getQuery());
     }
     else
@@ -62,7 +86,7 @@ public class FloatingSearchToolbarController extends SearchToolbarController
   private void cancelSearchApiAndHide(boolean clearText)
   {
     SearchEngine.cancelApiCall();
-    SearchEngine.cancelSearch();
+    SearchEngine.cancelInteractiveSearch();
 
     if (clearText)
       clear();
@@ -72,10 +96,24 @@ public class FloatingSearchToolbarController extends SearchToolbarController
 
   public boolean hide()
   {
-    if (mToolbar.getVisibility() != View.VISIBLE)
+    if (!UiUtils.isVisible(mToolbar))
       return false;
 
-    UiUtils.disappearSlidingUp(mToolbar, null);
+    Animations.disappearSliding(mToolbar, Animations.TOP, new Runnable()
+    {
+      @Override
+      public void run()
+      {
+        if (mVisibilityListener != null)
+          mVisibilityListener.onSearchVisibilityChanged(false);
+      }
+    });
+
     return true;
+  }
+
+  public void setVisibilityListener(@Nullable VisibilityListener visibilityListener)
+  {
+    mVisibilityListener = visibilityListener;
   }
 }

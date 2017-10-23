@@ -22,7 +22,7 @@ namespace m2
 
     T x, y;
 
-    Point() {}
+    Point() : x(T()), y(T()) {}
     Point(T x_, T y_) : x(x_), y(y_) {}
     template <typename U> Point(Point<U> const & u) : x(u.x), y(u.y) {}
 
@@ -33,6 +33,7 @@ namespace m2
       return ((fabs(x - p.x) < eps) && (fabs(y - p.y) < eps));
     }
 
+    // TODO (@y, @m): rename to SquaredLength.
     T SquareLength(Point<T> const & p) const
     {
       return math::sqr(x - p.x) + math::sqr(y - p.y);
@@ -132,11 +133,13 @@ namespace m2
       return m2::Point<T>((x + p.x) * 0.5, (y + p.y) * 0.5);
     }
 
+    T SquaredLength() const { return x * x + y * y; }
+
     /// @name VectorOperationsOnPoint
     // @{
     double Length() const
     {
-      return sqrt(x*x + y*y);
+      return sqrt(SquaredLength());
     }
 
     Point<T> Normalize() const
@@ -146,11 +149,11 @@ namespace m2
       return Point<T>(x / module, y / module);
     }
 
-    pair<Point<T>, Point<T> > Normals(T prolongationFactor = 1) const
+    std::pair<Point<T>, Point<T> > Normals(T prolongationFactor = 1) const
     {
       T const prolongatedX = prolongationFactor * x;
       T const prolongatedY = prolongationFactor * y;
-      return pair<Point<T>, Point<T> >(Point<T>(static_cast<T>(-prolongatedY), static_cast<T>(prolongatedX)),
+      return std::pair<Point<T>, Point<T> >(Point<T>(static_cast<T>(-prolongatedY), static_cast<T>(prolongatedX)),
                                        Point<T>(static_cast<T>(prolongatedY), static_cast<T>(-prolongatedX)));
     }
     // @}
@@ -171,6 +174,9 @@ namespace m2
       x = cosAngle * oldX - sinAngle * y;
       y = sinAngle * oldX + cosAngle * y;
     }
+
+    // Returns vector rotated 90 degrees counterclockwise.
+    Point Ort() const { return Point(-y, x); }
 
     void Transform(m2::Point<T> const & org,
                    m2::Point<T> const & dx, m2::Point<T> const & dy)
@@ -244,84 +250,18 @@ namespace m2
     return res;
   }
 
-  template <typename T>
-  bool IsPointInsideTriangle(Point<T> const & p,
-                                     Point<T> const & a, Point<T> const & b, Point<T> const & c)
-  {
-    T const cpab = CrossProduct(b - a, p - a);
-    T const cpbc = CrossProduct(c - b, p - b);
-    T const cpca = CrossProduct(a - c, p - c);
-    return (cpab <= 0 && cpbc <= 0 && cpca <= 0) || (cpab >= 0 && cpbc >= 0 && cpca >= 0);
-  }
-
-  template <typename T>
-  bool IsPointStrictlyInsideTriangle(Point<T> const & p,
-                                     Point<T> const & a, Point<T> const & b, Point<T> const & c)
-  {
-    T const cpab = CrossProduct(b - a, p - a);
-    T const cpbc = CrossProduct(c - b, p - b);
-    T const cpca = CrossProduct(a - c, p - c);
-    return (cpab < 0 && cpbc < 0 && cpca < 0) || (cpab > 0 && cpbc > 0 && cpca > 0);
-  }
-
-  template <typename T>
-  bool SegmentsIntersect(Point<T> const & a, Point<T> const & b,
-                         Point<T> const & c, Point<T> const & d)
-  {
-    return
-        max(a.x, b.x) >= min(c.x, d.x) &&
-        min(a.x, b.x) <= max(c.x, d.x) &&
-        max(a.y, b.y) >= min(c.y, d.y) &&
-        min(a.y, b.y) <= max(c.y, d.y) &&
-        CrossProduct(c - a, b - a) * CrossProduct(d - a, b - a) <= 0 &&
-        CrossProduct(a - c, d - c) * CrossProduct(b - c, d - c) <= 0;
-  }
-
-  /// Is segment (v, v1) in cone (vPrev, v, vNext)?
-  /// @precondition Orientation CCW!!!
-  template <typename PointT> bool IsSegmentInCone(PointT v, PointT v1, PointT vPrev, PointT vNext)
-  {
-    PointT const diff = v1 - v;
-    PointT const edgeL = vPrev - v;
-    PointT const edgeR = vNext - v;
-    double const cpLR = CrossProduct(edgeR, edgeL);
-
-    if (my::AlmostEqualULPs(cpLR,  0.0))
-    {
-      // Points vPrev, v, vNext placed on one line;
-      // use property that polygon has CCW orientation.
-      return CrossProduct(vNext - vPrev, v1 - vPrev) > 0.0;
-    }
-
-    if (cpLR > 0)
-    {
-      // vertex is convex
-      return CrossProduct(diff, edgeR) < 0 && CrossProduct(diff, edgeL) > 0.0;
-    }
-    else
-    {
-      // vertex is reflex
-      return CrossProduct(diff, edgeR) < 0 || CrossProduct(diff, edgeL) > 0.0;
-    }
-  }
-
-  template <typename PointT>
-  int GetOrientation(PointT const & p1, PointT const & p2, PointT const & pt)
-  {
-    double const sa = CrossProduct(p1 - pt, p2 - pt);
-    if (sa > 0.0)
-      return 1;
-    if (sa < 0.0)
-      return -1;
-    return 0;
-  }
-
-  template <typename T> string DebugPrint(m2::Point<T> const & p)
+  template <typename T> std::string DebugPrint(m2::Point<T> const & p)
   {
     ostringstream out;
     out.precision(20);
     out << "m2::Point<" << typeid(T).name() << ">(" << p.x << ", " << p.y << ")";
     return out.str();
+  }
+
+  template <typename T>
+  bool AlmostEqualAbs(m2::Point<T> const & a, m2::Point<T> const & b, double const eps)
+  {
+    return my::AlmostEqualAbs(a.x, b.x, eps) && my::AlmostEqualAbs(a.y, b.y, eps);
   }
 
   template <typename T>
@@ -341,7 +281,7 @@ namespace m2
 
     PointT const beVec = e - b;
     PointT beNormalizedVec = beVec.Normalize();
-    pair<PointT, PointT > beNormVecs = beNormalizedVec.Normals(w);
+    std::pair<PointT, PointT > beNormVecs = beNormalizedVec.Normals(w);
 
     arrPnts[0] = e + beNormVecs.first;
     arrPnts[1] = e + beNormalizedVec * l;
@@ -355,7 +295,7 @@ namespace m2
   Point<T> PointAtSegment(Point<T> const & p1, Point<T> const & p2, T shiftFromP1)
   {
     Point<T> p12 = p2 - p1;
-    shiftFromP1 = my::clamp(shiftFromP1, 0.0, p12.Length());
+    shiftFromP1 = my::clamp(shiftFromP1, static_cast<T>(0.0), static_cast<T>(p12.Length()));
     return p1 + p12.Normalize() * shiftFromP1;
   }
 
@@ -389,7 +329,7 @@ namespace m2
   typedef Point<uint64_t> PointU64;
   typedef Point<int32_t> PointI;
   typedef Point<int64_t> PointI64;
-}
+}  // namespace m2
 
 namespace my
 {
@@ -400,4 +340,10 @@ bool AlmostEqualULPs(m2::Point<T> const & p1, m2::Point<T> const & p2, unsigned 
   return m2::AlmostEqualULPs(p1, p2, maxULPs);
 }
 
+template <typename T>
+bool AlmostEqualAbs(m2::Point<T> const & p1, m2::Point<T> const & p2, double const & eps)
+{
+  return m2::AlmostEqualAbs(p1, p2, eps);
 }
+
+}  // namespace my

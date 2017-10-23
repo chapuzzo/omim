@@ -1,16 +1,17 @@
 #pragma once
+
 #include "indexer/drawing_rule_def.hpp"
-#include "indexer/types_mapping.hpp"
-#include "indexer/scales.hpp"
 #include "indexer/feature_decl.hpp"
+#include "indexer/map_style.hpp"
+#include "indexer/scales.hpp"
+#include "indexer/types_mapping.hpp"
 
-#include "std/vector.hpp"
-#include "std/string.hpp"
-#include "std/iostream.hpp"
 #include "std/bitset.hpp"
-#include "std/noncopyable.hpp"
 #include "std/initializer_list.hpp"
-
+#include "std/iostream.hpp"
+#include "std/noncopyable.hpp"
+#include "std/string.hpp"
+#include "std/vector.hpp"
 
 class ClassifObject;
 
@@ -188,6 +189,9 @@ public:
   /// Invokes ASSERT in case of nonexisting type
   uint32_t GetTypeByPath(vector<string> const & path) const;
   uint32_t GetTypeByPath(initializer_list<char const *> const & lst) const;
+  /// @see GetReadableObjectName().
+  /// @returns 0 in case of nonexisting type.
+  uint32_t GetTypeByReadableObjectName(string const & name) const;
   //@}
 
   uint32_t GetIndexForType(uint32_t t) const { return m_mapping.GetIndex(t); }

@@ -1,9 +1,9 @@
 #include "testing/testing.hpp"
 
-#include "routing/osrm_router.hpp"
+#include "routing/index_router.hpp"
 
 #include "indexer/features_offsets_table.hpp"
-#include "indexer/mercator.hpp"
+#include "geometry/mercator.hpp"
 
 #include "platform/country_file.hpp"
 #include "platform/local_country_file.hpp"
@@ -16,6 +16,7 @@
 
 #include "defines.hpp"
 
+#include "base/checked_cast.hpp"
 #include "base/scope_guard.hpp"
 
 #include "std/bind.hpp"
@@ -60,8 +61,9 @@ void TestMapping(InputDataT const & data,
   platform::LocalCountryFile localFile(GetPlatform().WritableDir(), country, 0 /* version */);
   localFile.SyncWithDisk();
   platform::tests_support::ScopedMwm mapMwm(
-      localFile.GetCountryFile().GetNameWithExt(MapOptions::Map));
-  static char const ftSegsPath[] = "test1.tmp";
+      platform::GetFileName(localFile.GetCountryFile().GetName(), MapOptions::Map,
+                            version::FOR_TESTING_TWO_COMPONENT_MWM1));
+  static string const ftSegsPath = GetPlatform().WritablePathForFile("test1.tmp");
 
   platform::CountryIndexes::PreparePlaceOnDisk(localFile);
   string const & featuresOffsetsTablePath =
@@ -116,7 +118,7 @@ void TestMapping(InputDataT const & data,
 
     for (size_t i = 0; i < mapping.GetSegmentsCount(); ++i)
     {
-      TOsrmNodeId const node = mapping.GetNodeId(i);
+      TOsrmNodeId const node = mapping.GetNodeId(base::checked_cast<uint32_t>(i));
       size_t count = 0;
       mapping.ForEachFtSeg(node, [&] (OsrmMappingTypes::FtSeg const & s)
       {

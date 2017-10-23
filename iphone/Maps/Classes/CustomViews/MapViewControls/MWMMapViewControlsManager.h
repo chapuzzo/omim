@@ -1,45 +1,67 @@
 #import "MWMBottomMenuViewController.h"
+#import "MWMMapDownloaderMode.h"
 #import "MWMNavigationDashboardManager.h"
-
-#include "map/user_mark.hpp"
-#include "platform/location.hpp"
+#import "MWMSearchManager.h"
 
 @class MapViewController;
+@protocol MWMFeatureHolder;
+@protocol MWMBookingInfoHolder;
+
+namespace place_page
+{
+class Info;
+}  // namespace place_page
 
 @interface MWMMapViewControlsManager : NSObject
 
-@property (nonatomic) BOOL hidden;
-@property (nonatomic) BOOL zoomHidden;
-@property (nonatomic) MWMBottomMenuState menuState;
-@property (nonatomic, readonly) MWMNavigationDashboardState navigationState;
-@property (nonatomic) BOOL searchHidden;
++ (MWMMapViewControlsManager *)manager;
+
+@property(nonatomic) BOOL hidden;
+@property(nonatomic) BOOL zoomHidden;
+@property(nonatomic) BOOL sideButtonsHidden;
+@property(nonatomic) BOOL trafficButtonHidden;
+@property(nonatomic) MWMBottomMenuState menuState;
+@property(nonatomic) MWMBottomMenuState menuRestoreState;
+@property(nonatomic) BOOL isDirectionViewHidden;
 
 - (instancetype)init __attribute__((unavailable("init is not available")));
 - (instancetype)initWithParentController:(MapViewController *)controller;
 
-- (void)onEnterForeground;
+- (UIStatusBarStyle)preferredStatusBarStyle;
 
 #pragma mark - Layout
 
-- (void)willRotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
-                                duration:(NSTimeInterval)duration;
+- (void)mwm_refreshUI;
+
 - (void)viewWillTransitionToSize:(CGSize)size
        withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator;
 
 #pragma mark - MWMPlacePageViewManager
 
-@property (nonatomic, readonly) BOOL isDirectionViewShown;
-
 - (void)dismissPlacePage;
-- (void)showPlacePageWithUserMark:(unique_ptr<UserMarkCopy>)userMark;
+- (void)showPlacePage:(place_page::Info const &)info;
+- (void)addPlace:(BOOL)isBusiness hasPoint:(BOOL)hasPoint point:(m2::PointD const &)point;
 
 #pragma mark - MWMNavigationDashboardManager
 
-- (void)setupRoutingDashboard:(location::FollowingInfo const &)info;
-- (void)playTurnNotifications;
-- (void)routingReady;
-- (void)routingNavigation;
-- (void)handleRoutingError;
-- (void)setRouteBuildingProgress:(CGFloat)progress;
+- (void)onRoutePrepare;
+- (void)onRouteRebuild;
+- (void)onRouteReady;
+- (void)onRouteStart;
+- (void)onRouteStop;
+
+#pragma mark - MWMSearchManager
+
+- (void)actionDownloadMaps:(MWMMapDownloaderMode)mode;
+- (BOOL)searchText:(NSString *)text forInputLocale:(NSString *)locale;
+- (void)searchTextOnMap:(NSString *)text forInputLocale:(NSString *)locale;
+
+#pragma mark - MWMFeatureHolder
+
+- (id<MWMFeatureHolder>)featureHolder;
+
+#pragma mark - MWMBookingInfoHolder
+
+- (id<MWMBookingInfoHolder>)bookingInfoHolder;
 
 @end

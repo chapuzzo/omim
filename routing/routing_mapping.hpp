@@ -1,8 +1,8 @@
 #pragma once
 
-#include "osrm2feature_map.hpp"
-#include "osrm_data_facade.hpp"
-#include "router.hpp"
+#include "routing/osrm2feature_map.hpp"
+#include "routing/osrm_data_facade.hpp"
+#include "routing/router.hpp"
 
 #include "indexer/index.hpp"
 
@@ -25,7 +25,7 @@ struct RoutingMapping
 
   /// Default constructor to create invalid instance for existing client code.
   /// @postcondition IsValid() == false.
-  RoutingMapping() : m_pIndex(nullptr) {}
+  RoutingMapping() : m_error(IRouter::ResultCode::RouteFileNotExist), m_pIndex(nullptr) {}
   /// @param countryFile Country file name without extension.
   RoutingMapping(string const & countryFile, MwmSet & index);
   ~RoutingMapping();
@@ -106,6 +106,8 @@ public:
 
   TRoutingMappingPtr GetMappingByName(string const & mapName);
 
+  TRoutingMappingPtr GetMappingById(Index::MwmId const & id);
+
   template <class TFunctor>
   void ForEachMapping(TFunctor toDo)
   {
@@ -116,6 +118,7 @@ public:
 
 private:
   TCountryFileFn m_countryFileFn;
+  // TODO (ldragunov) Rewrite to mwmId.
   unordered_map<string, TRoutingMappingPtr> m_mapping;
   MwmSet & m_index;
 };

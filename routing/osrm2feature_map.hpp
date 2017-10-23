@@ -15,11 +15,10 @@
 #include "std/utility.hpp"
 #include "std/vector.hpp"
 
-#include "3party/succinct/rs_bit_vector.hpp"
-#include "3party/succinct/elias_fano_compressed_list.hpp"
-
 #include "defines.hpp"
 
+#include "3party/succinct/rs_bit_vector.hpp"
+#include "3party/succinct/elias_fano_compressed_list.hpp"
 
 namespace routing
 {
@@ -57,6 +56,8 @@ namespace OsrmMappingTypes
 
     bool IsIntersect(FtSeg const & other) const;
 
+    bool IsForward() const { return m_pointEnd > m_pointStart; }
+
     bool IsValid() const
     {
       return m_fid != kInvalidFid;
@@ -88,14 +89,14 @@ namespace OsrmMappingTypes
   };
 #pragma pack (pop)
 
-/// Checks if a smallSeg is inside a bigSeg and at least one point of a smallSeg differs from
-/// point of a bigSeg. Note that the smallSeg must be an ordered segment with 1 point length.
+/// Checks if a smallSeg is inside a bigSeg. Note that the smallSeg must be an ordered segment
+/// with 1 point length.
 bool IsInside(FtSeg const & bigSeg, FtSeg const & smallSeg);
 
 /// Splits segment by splitter segment and takes part of it.
-/// Warning this function includes a whole splitter segment to a result segment described by the
-/// resultFromLeft variable.
-FtSeg SplitSegment(FtSeg const & segment, FtSeg const & splitter, bool const resultFromLeft);
+/// Warning! This function returns part from the start of the segment to the splitter, including it.
+/// Splitter segment points must be ordered.
+FtSeg SplitSegment(FtSeg const & segment, FtSeg const & splitter);
 }  // namespace OsrmMappingTypes
 
 class OsrmFtSegMapping;
@@ -165,6 +166,11 @@ public:
   /// @name For unit test purpose only.
   //@{
   /// @return STL-like range [s, e) of segments indexies for passed node.
+  /// @note Methods GetSegmentsRange(...) and GetOsrmNodes(...) are not symmetric.
+  /// For example in Tverskay Oblast for node id 161179 two FtSet can be gotten
+  /// with GetSegmentsRange() / GetSegmentByIndex().
+  /// But having these segments it's impossible to get node id 161179 with the help of
+  /// GetOsrmNodes(...).
   pair<size_t, size_t> GetSegmentsRange(TOsrmNodeId nodeId) const;
   /// @return Node id for segment's index.
   TOsrmNodeId GetNodeId(uint32_t segInd) const;

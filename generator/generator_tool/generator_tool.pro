@@ -1,20 +1,32 @@
 # Generator binary
 
 ROOT_DIR = ../..
-DEPENDENCIES = generator routing storage indexer platform geometry coding base \
-               osrm gflags expat tess2 jansson protobuf tomcrypt \
-               succinct stats_client
 
+DEPENDENCIES = generator routing traffic routing_common search storage indexer editor mwm_diff ugc \
+               platform geometry coding base freetype expat jansson protobuf osrm stats_client \
+               minizip succinct pugixml tess2 gflags oauthcpp icu
 include($$ROOT_DIR/common.pri)
 
-INCLUDEPATH *= $$ROOT_DIR/3party/gflags/src
+INCLUDEPATH *= $$ROOT_DIR/3party/gflags/src \
+               $$ROOT_DIR/3party/jansson/src
 
 CONFIG += console warn_on
-CONFIG -= app_bundle
+!CONFIG(map_designer_standalone) {
+  CONFIG -= app_bundle
+}
 TEMPLATE = app
 
 # needed for Platform::WorkingDir() and unicode combining
 QT *= core
+LIBS *= -lsqlite3
+
+!iphone*:!android*:!tizen:!macx-* {
+  QT *= network
+}
+
+macx-* {
+  LIBS *= "-framework IOKit" "-framework SystemConfiguration"
+}
 
 SOURCES += \
     generator_tool.cpp \

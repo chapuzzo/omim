@@ -1,7 +1,5 @@
 #include "routing/osrm2feature_map.hpp"
 
-#include "defines.hpp"
-
 #include "indexer/data_header.hpp"
 
 #include "platform/local_country_file_utils.hpp"
@@ -19,6 +17,8 @@
 #include "std/fstream.hpp"
 #include "std/sstream.hpp"
 #include "std/unordered_map.hpp"
+
+#include "defines.hpp"
 
 #include "3party/succinct/mapper.hpp"
 
@@ -59,8 +59,7 @@ bool FtSeg::Merge(FtSeg const & other)
   if (other.m_fid != m_fid)
     return false;
 
-  bool const dir = other.m_pointEnd > other.m_pointStart;
-  if (dir != (m_pointEnd > m_pointStart))
+  if (IsForward() != other.IsForward())
     return false;
 
   auto const s1 = min(m_pointStart, m_pointEnd);
@@ -72,7 +71,7 @@ bool FtSeg::Merge(FtSeg const & other)
   {
     m_pointStart = min(s1, s2);
     m_pointEnd = max(e1, e2);
-    if (!dir)
+    if (!other.IsForward())
       swap(m_pointStart, m_pointEnd);
 
     return true;
@@ -118,40 +117,23 @@ bool IsInside(FtSeg const & bigSeg, FtSeg const & smallSeg)
   auto segmentLeft = min(bigSeg.m_pointStart, bigSeg.m_pointEnd);
   auto segmentRight = max(bigSeg.m_pointStart, bigSeg.m_pointEnd);
 
-  return (smallSeg.m_pointStart != segmentLeft || smallSeg.m_pointEnd != segmentRight) &&
-         (segmentLeft <= smallSeg.m_pointStart && segmentRight >= smallSeg.m_pointEnd);
+  return (segmentLeft <= smallSeg.m_pointStart && segmentRight >= smallSeg.m_pointEnd);
 }
 
-FtSeg SplitSegment(FtSeg const & segment, FtSeg const & splitter, bool const resultFromLeft)
+FtSeg SplitSegment(FtSeg const & segment, FtSeg const & splitter)
 {
   FtSeg resultSeg;
   resultSeg.m_fid = segment.m_fid;
 
   if (segment.m_pointStart < segment.m_pointEnd)
   {
-    if (resultFromLeft)
-    {
-      resultSeg.m_pointStart = segment.m_pointStart;
-      resultSeg.m_pointEnd = splitter.m_pointEnd;
-    }
-    else
-    {
-      resultSeg.m_pointStart = splitter.m_pointStart;
-      resultSeg.m_pointEnd = segment.m_pointEnd;
-    }
+    resultSeg.m_pointStart = segment.m_pointStart;
+    resultSeg.m_pointEnd = splitter.m_pointEnd;
   }
   else
   {
-    if (resultFromLeft)
-    {
-      resultSeg.m_pointStart = segment.m_pointStart;
-      resultSeg.m_pointEnd = splitter.m_pointStart;
-    }
-    else
-    {
-      resultSeg.m_pointStart = splitter.m_pointEnd;
-      resultSeg.m_pointEnd = segment.m_pointEnd;
-    }
+    resultSeg.m_pointStart = segment.m_pointStart;
+    resultSeg.m_pointEnd = splitter.m_pointStart;
   }
   return resultSeg;
 }
@@ -170,6 +152,8 @@ void OsrmFtSegMapping::Load(FilesMappingContainer & cont, platform::LocalCountry
   {
     ReaderSource<FileReader> src(cont.GetReader(ROUTING_NODEIND_TO_FTSEGIND_FILE_TAG));
     uint32_t const count = ReadVarUint<uint32_t>(src);
+    if (count == 0)
+      return;
     m_offsets.resize(count);
     for (uint32_t i = 0; i < count; ++i)
     {
@@ -432,7 +416,7 @@ void OsrmFtSegBackwardIndex::Construct(OsrmFtSegMapping & mapping, uint32_t maxN
   Clear();
 
   feature::DataHeader header(localFile.GetPath(MapOptions::Map));
-  m_oldFormat = header.GetFormat() < version::v5;
+  m_oldFormat = header.GetFormat() < version::Format::v5;
   if (m_oldFormat)
     LOG(LINFO, ("Using old format index for", localFile.GetCountryName()));
 

@@ -17,8 +17,7 @@ ScopedDir::ScopedDir(string const & relativePath)
       m_relativePath(relativePath),
       m_reset(false)
 {
-  Platform & platform = GetPlatform();
-  Platform::EError ret = platform.MkDir(GetFullPath());
+  Platform::EError ret = Platform::MkDir(GetFullPath());
   switch (ret)
   {
     case Platform::ERR_OK:
@@ -32,6 +31,11 @@ ScopedDir::ScopedDir(string const & relativePath)
       TEST(false, ("Can't create directory:", GetFullPath(), "error:", ret));
       break;
   }
+}
+
+ScopedDir::ScopedDir(ScopedDir const & parent, string const & name)
+  : ScopedDir(my::JoinFoldersToPath(parent.GetRelativePath(), name))
+{
 }
 
 ScopedDir::~ScopedDir()

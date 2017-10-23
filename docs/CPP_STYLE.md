@@ -1,6 +1,6 @@
 # C++ Style Guide
 
-In general, [Google's coding standard](http://google-styleguide.googlecode.com/svn/trunk/cppguide.xml) is used, and we strongly encourage to read it.
+In general, [Google's coding standard](https://google.github.io/styleguide/cppguide.html) is used, and we strongly encourage to read it.
 
 Below are our specific (but not all!) exceptions to the Google's coding standard:
 
@@ -9,6 +9,8 @@ Below are our specific (but not all!) exceptions to the Google's coding standard
 - File names are lowercase with underscores, like `file_reader.cpp`.
 - We use `#pragma once` instead of the `#define` Guard in header files.
 - We don't include system, std and boost headers directly, use `#include "std/<wrapper.hpp>"`.
+- Includes are sorted and grouped by directory, there should be newlines between different directories.
+- Order of directories in includes: "current_dir/current_file.hpp", other includes from the same dir, includes from other dirs sorted by dependencies: `coding, geometry, base, std, "defines.hpp", 3party` should go last in that order.
 - We ARE using C++ exceptions.
 - We are using all features of C++11 (the only known exception is thread_local which is not fully supported on all platforms).
 - We don't use boost libraries which require linking (and prefer C++11 types over their boost counterparts).
@@ -25,7 +27,8 @@ Naming and formatting
 - Space after the keyword in conditions and loops. Space after `;` in `for` loop.
 - Space between binary operators: `x = y * y + z * z`.
 - Space after double dash.
-- Compile-time constants must be named in camelCase, starting with a lower-case `k`, e.g. `kCompileTimeConstant`.
+- We use `using` keyword instead of `typedef`.
+- Compile-time constants must be named in camelCase, starting with a lower-case `k`, e.g. `kCompileTimeConstant` and marked as `constexpr` when possible.
 - Values of enum classes must be named in CamelCase, e.g. `enum class Color { Red, Green, LightBlue };`.
 - Macros and C-style enums must be named in UPPER_CASE, and enum values must be prefixed with a capitalized enum name.
 
@@ -48,7 +51,7 @@ To automatically format a file, install `clang-format` and run:
 
 #include "std/math.hpp"
 
-uint16_t const kBufferSize = 255;
+uint16_t constexpr kBufferSize = 255;
 
 // C-style enums are ALL_CAPS. But remember that C++11 enum classes are preferred.
 enum Type
@@ -58,7 +61,7 @@ enum Type
   TYPE_STRING
 };
 
-typedef double TMyTypeStartsWithCapitalTLetter;
+using TMyTypeStartsWithCapitalTLetter = double;
 
 class ComplexClass
 {

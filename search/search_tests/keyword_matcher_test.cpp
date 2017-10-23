@@ -1,10 +1,10 @@
 #include "testing/testing.hpp"
+
+#include "search/common.hpp"
 #include "search/keyword_matcher.hpp"
 
-#include "search/search_common.hpp"
-
-#include "indexer/search_string_utils.hpp"
 #include "indexer/search_delimiters.hpp"
+#include "indexer/search_string_utils.hpp"
 
 #include "base/buffer_vector.hpp"
 #include "base/stl_add.hpp"
@@ -308,9 +308,9 @@ UNIT_TEST(KeywordMatcher_NameTooLong)
     {MATCHES, BETTER_OR_EQUAL, name[2].c_str()},
   };
 
-  char const * query[] = { "a", "aa", "aa ", "b", "bb", "bb ", "t" };
-  for (int i = 0; i < ARRAY_SIZE(query); ++i)
-    TestKeywordMatcher(query[i], testCases);
+  char const * queries[] = { "a", "aa", "aa ", "b", "bb", "bb ", "t" };
+  for (auto const & query : queries)
+    TestKeywordMatcher(query, testCases);
 }
 
 UNIT_TEST(KeywordMatcher_ManyTokensInReverseOrder)

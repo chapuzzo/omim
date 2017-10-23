@@ -13,24 +13,24 @@ extern "C"
   JNIEXPORT void JNICALL
   Java_com_mapswithme_maps_sound_TtsPlayer_nativeEnableTurnNotifications(JNIEnv * env, jclass thiz, jboolean enable)
   {
-    return frm()->EnableTurnNotifications(enable == JNI_TRUE ? true : false);
+    return frm()->GetRoutingManager().EnableTurnNotifications(static_cast<bool>(enable));
   }
 
   JNIEXPORT jboolean JNICALL
   Java_com_mapswithme_maps_sound_TtsPlayer_nativeAreTurnNotificationsEnabled(JNIEnv * env, jclass clazz)
   {
-    return frm()->AreTurnNotificationsEnabled() ? JNI_TRUE : JNI_FALSE;
+    return static_cast<jboolean>(frm()->GetRoutingManager().AreTurnNotificationsEnabled());
   }
 
   JNIEXPORT void JNICALL
   Java_com_mapswithme_maps_sound_TtsPlayer_nativeSetTurnNotificationsLocale(JNIEnv * env, jclass thiz, jstring jLocale)
   {
-    frm()->SetTurnNotificationsLocale(jni::ToNativeString(env, jLocale));
+    frm()->GetRoutingManager().SetTurnNotificationsLocale(jni::ToNativeString(env, jLocale));
   }
 
   JNIEXPORT jstring JNICALL
   Java_com_mapswithme_maps_sound_TtsPlayer_nativeGetTurnNotificationsLocale(JNIEnv * env, jclass thiz)
   {
-    return jni::ToJavaString(env, frm()->GetTurnNotificationsLocale().c_str());
+    return jni::ToJavaString(env, frm()->GetRoutingManager().GetTurnNotificationsLocale().c_str());
   }
 } // extern "C"

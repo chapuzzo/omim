@@ -1,6 +1,6 @@
 #import "MWMActivityViewController.h"
-#import "MWMShareLocationActivityItem.h"
-#import "MWMSharePedestrianRoutesToastActivityItem.h"
+#import "MWMEditorViralActivityItem.h"
+#import "MWMShareActivityItem.h"
 
 @interface MWMActivityViewController ()
 
@@ -13,26 +13,36 @@
 
 - (instancetype)initWithActivityItem:(id<UIActivityItemSource>)activityItem
 {
-  self = [super initWithActivityItems:@[activityItem] applicationActivities:nil];
+  return [self initWithActivityItems:@[activityItem]];
+}
+
+- (instancetype)initWithActivityItems:(NSArray *)activityItems
+{
+  self = [super initWithActivityItems:activityItems applicationActivities:nil];
   if (self)
     self.excludedActivityTypes = @[UIActivityTypePrint, UIActivityTypeAssignToContact, UIActivityTypeSaveToCameraRoll,
-                                   UIActivityTypeAirDrop, UIActivityTypeAddToReadingList, UIActivityTypePostToFlickr,
-                                   UIActivityTypePostToVimeo];
+                                 UIActivityTypeAirDrop, UIActivityTypeAddToReadingList, UIActivityTypePostToFlickr,
+                                 UIActivityTypePostToVimeo];
   return self;
 }
 
-+ (instancetype)shareControllerForLocationTitle:(NSString *)title location:(CLLocationCoordinate2D)location
-                                     myPosition:(BOOL)myPosition
++ (instancetype)shareControllerForMyPosition:(CLLocationCoordinate2D const &)location
 {
-  MWMShareLocationActivityItem * item = [[MWMShareLocationActivityItem alloc] initWithTitle:title location:location
-                                                                                 myPosition:myPosition];
+  MWMShareActivityItem * item = [[MWMShareActivityItem alloc] initForMyPositionAtLocation:location];
   return [[self alloc] initWithActivityItem:item];
 }
 
-+ (instancetype)shareControllerForPedestrianRoutesToast
++ (instancetype)shareControllerForPlacePageObject:(id<MWMPlacePageObject>)object;
 {
-  MWMSharePedestrianRoutesToastActivityItem * item = [[MWMSharePedestrianRoutesToastActivityItem alloc] init];
-  MWMActivityViewController * vc = [[self alloc] initWithActivityItem:item];
+  MWMShareActivityItem * item = [[MWMShareActivityItem alloc] initForPlacePageObject:object];
+  return [[self alloc] initWithActivityItem:item];
+}
+
++ (instancetype)shareControllerForEditorViral
+{
+  MWMEditorViralActivityItem * item = [[MWMEditorViralActivityItem alloc] init];
+  UIImage * image = [UIImage imageNamed:@"img_sharing_editor"];
+  MWMActivityViewController * vc = [[self alloc] initWithActivityItems:@[item, image]];
   if ([vc respondsToSelector:@selector(popoverPresentationController)])
     vc.popoverPresentationController.permittedArrowDirections = UIPopoverArrowDirectionDown;
   return vc;
@@ -48,16 +58,6 @@
     self.popoverPresentationController.sourceRect = anchorView.bounds;
   }
   [parentVC presentViewController:self animated:YES completion:nil];
-}
-
-- (BOOL)shouldAutorotate
-{
-  return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations
-{
-  return UIInterfaceOrientationMaskAll;
 }
 
 @end

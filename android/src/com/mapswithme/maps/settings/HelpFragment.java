@@ -8,12 +8,11 @@ import android.support.annotation.Nullable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.TextView;
+
 import com.mapswithme.maps.BuildConfig;
 import com.mapswithme.maps.R;
 import com.mapswithme.maps.WebContainerDelegate;
-import com.mapswithme.maps.widget.BaseShadowController;
-import com.mapswithme.maps.widget.ObservableWebView;
-import com.mapswithme.maps.widget.WebViewShadowController;
 import com.mapswithme.util.Constants;
 import com.mapswithme.util.Utils;
 import com.mapswithme.util.statistics.AlohaHelper;
@@ -30,15 +29,6 @@ public class HelpFragment extends BaseSettingsFragment
   }
 
   @Override
-  protected BaseShadowController createShadowController()
-  {
-    clearPaddings();
-    adjustMargins(mDelegate.getWebView());
-    return new WebViewShadowController((ObservableWebView)mDelegate.getWebView())
-               .addBottomShadow();
-  }
-
-  @Override
   public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState)
   {
     super.onCreateView(inflater, container, savedInstanceState);
@@ -52,7 +42,8 @@ public class HelpFragment extends BaseSettingsFragment
       }
     };
 
-    mFrame.findViewById(R.id.feedback).setOnClickListener(new View.OnClickListener()
+    TextView feedback = (TextView)mFrame.findViewById(R.id.feedback);
+    feedback.setOnClickListener(new View.OnClickListener()
     {
       @Override
       public void onClick(View v)
@@ -64,16 +55,15 @@ public class HelpFragment extends BaseSettingsFragment
             {
               private void sendGeneralFeedback()
               {
-                Statistics.INSTANCE.trackSimpleNamedEvent(Statistics.EventName.Settings.FEEDBACK_GENERAL);
+                Statistics.INSTANCE.trackEvent(Statistics.EventName.Settings.FEEDBACK_GENERAL);
                 AlohaHelper.logClick(AlohaHelper.Settings.FEEDBACK_GENERAL);
-
                 startActivity(new Intent(Intent.ACTION_SENDTO)
                                   .setData(Utils.buildMailUri(Constants.Email.FEEDBACK, "[" + BuildConfig.VERSION_NAME + "] Feedback", "")));
               }
 
               private void reportBug()
               {
-                Statistics.INSTANCE.trackSimpleNamedEvent(Statistics.EventName.Settings.REPORT_BUG);
+                Statistics.INSTANCE.trackEvent(Statistics.EventName.Settings.REPORT_BUG);
                 AlohaHelper.logClick(AlohaHelper.Settings.REPORT_BUG);
                 Utils.sendSupportMail(getActivity(), "Bugreport from user");
               }

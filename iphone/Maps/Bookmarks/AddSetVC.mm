@@ -1,13 +1,8 @@
-
 #import "AddSetVC.h"
-#import "UIViewController+Navigation.h"
 #import "AddSetTableViewCell.h"
+#import "SwiftBridge.h"
 
 #include "Framework.h"
-
-#define TEXT_FIELD_TAG 666
-
-static NSString * const kAddSetCellTableViewCell = @"AddSetTableViewCell";
 
 @interface AddSetVC () <AddSetTableViewCellProtocol>
 
@@ -29,8 +24,7 @@ static NSString * const kAddSetCellTableViewCell = @"AddSetTableViewCell";
   self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave target:self action:@selector(onSaveClicked)];
   [(UIViewController *)self showBackButton];
   self.title = L(@"add_new_set");
-  [self.tableView registerNib:[UINib nibWithNibName:kAddSetCellTableViewCell bundle:nil]
-       forCellReuseIdentifier:kAddSetCellTableViewCell];
+  [self.tableView registerWithCellClass:[AddSetTableViewCell class]];
 }
 
 - (void)onSaveClicked
@@ -42,13 +36,9 @@ static NSString * const kAddSetCellTableViewCell = @"AddSetTableViewCell";
 {
   if (text.length == 0)
     return;
-  [self.delegate addSetVC:self didAddSetWithIndex:static_cast<int>(GetFramework().AddCategory([text UTF8String]))];
+  [self.delegate addSetVC:self
+       didAddSetWithIndex:static_cast<int>(GetFramework().AddCategory(text.UTF8String))];
   [self.navigationController popViewControllerAnimated:YES];
-}
-
-- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation
-{
-  return YES;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
@@ -58,7 +48,8 @@ static NSString * const kAddSetCellTableViewCell = @"AddSetTableViewCell";
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-  self.cell = (AddSetTableViewCell *)[tableView dequeueReusableCellWithIdentifier:kAddSetCellTableViewCell];
+  self.cell = static_cast<AddSetTableViewCell *>(
+      [tableView dequeueReusableCellWithCellClass:[AddSetTableViewCell class] indexPath:indexPath]);
   self.cell.delegate = self;
   return self.cell;
 }

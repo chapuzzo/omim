@@ -6,75 +6,77 @@ CONFIG += staticlib warn_on
 
 ROOT_DIR = ..
 
-INCLUDEPATH *= $$ROOT_DIR/3party/protobuf/src $$ROOT_DIR/3party/expat/lib $$ROOT_DIR/3party/freetype/include
+INCLUDEPATH *= $$ROOT_DIR/3party/protobuf/protobuf/src $$ROOT_DIR/3party/freetype/include $$ROOT_DIR/3party/jansson/src
 
 include($$ROOT_DIR/common.pri)
 
 HEADERS += \
-    framework.hpp \
-    feature_vec_model.hpp \
-    navigator.hpp \
-    information_display.hpp \
-    location_state.hpp \
-    benchmark_provider.hpp \
-    benchmark_engine.hpp \
-    ruler.hpp \
+    api_mark_point.hpp \
+    benchmark_tools.hpp \
     bookmark.hpp \
-    geourl_process.hpp \
-    country_status_display.hpp \
-    rotate_screen_task.hpp \
-    compass_arrow.hpp \
-    animator.hpp \
-    move_screen_task.hpp \
-    change_viewport_task.hpp \
-    mwm_url.hpp \
     bookmark_manager.hpp \
+    chart_generator.hpp \
+    displacement_mode_manager.hpp \
+    displayed_categories_modifiers.hpp \
+    feature_vec_model.hpp \
+    framework.hpp \
     ge0_parser.hpp \
+    geourl_process.hpp \
+    gps_track.hpp \
+    gps_track_collection.hpp \
+    gps_track_filter.hpp \
+    gps_track_storage.hpp \
+    gps_tracker.hpp \
+    local_ads_manager.hpp \
+    local_ads_mark.hpp \
+    mwm_url.hpp \
+    place_page_info.hpp \
+    reachable_by_taxi_checker.hpp \
+    routing_manager.hpp \
+    routing_mark.hpp \
+    search_mark.hpp \
+    taxi_delegate.hpp \
     track.hpp \
-    alfa_animation_task.hpp \
-    user_mark_container.hpp \
+    traffic_manager.hpp \
+    user.hpp \
     user_mark.hpp \
-    user_mark_dl_cache.hpp \
-    anim_phase_chain.hpp \
-    pin_click_manager.hpp \
-    country_tree.hpp \
-    active_maps_layout.hpp \
-    navigator_utils.hpp \
+    user_mark_container.hpp \
 
 SOURCES += \
+    ../api/src/c/api-client.c \
+    address_finder.cpp \
+    api_mark_point.cpp \
+    benchmark_tools.cpp \
+    bookmark.cpp \
+    bookmark_manager.cpp \
+    chart_generator.cpp \
+    displacement_mode_manager.cpp \
+    displayed_categories_modifiers.cpp \
     feature_vec_model.cpp \
     framework.cpp \
-    navigator.cpp \
-    information_display.cpp \
-    location_state.cpp \
-    benchmark_provider.cpp \
-    benchmark_engine.cpp \
-    ruler.cpp \
-    address_finder.cpp \
-    geourl_process.cpp \
-    bookmark.cpp \
-    country_status_display.cpp \
-    rotate_screen_task.cpp \
-    compass_arrow.cpp \
-    animator.cpp \
-    move_screen_task.cpp \
-    change_viewport_task.cpp \
-    mwm_url.cpp \
-    bookmark_manager.cpp \
     ge0_parser.cpp \
-    ../api/src/c/api-client.c \
+    geourl_process.cpp \
+    gps_track.cpp \
+    gps_track_collection.cpp \
+    gps_track_filter.cpp \
+    gps_track_storage.cpp \
+    gps_tracker.cpp \
+    local_ads_manager.cpp \
+    local_ads_mark.cpp \
+    local_ads_supported_types.cpp \
+    mwm_url.cpp \
+    place_page_info.cpp \
+    reachable_by_taxi_checker.cpp \
+    routing_manager.cpp \
+    routing_mark.cpp \
+    search_mark.cpp \
+    taxi_delegate.cpp \
     track.cpp \
-    alfa_animation_task.cpp \
+    traffic_manager.cpp \
+    user.cpp \
+    user_mark.cpp \
     user_mark_container.cpp \
-    user_mark_dl_cache.cpp \
-    anim_phase_chain.cpp \
-    pin_click_manager.cpp \
-    country_tree.cpp \
-    active_maps_layout.cpp \
-    navigator_utils.cpp \
 
 !iphone*:!tizen*:!android* {
-  HEADERS += qgl_render_context.hpp
-  SOURCES += qgl_render_context.cpp
   QT += opengl
 }

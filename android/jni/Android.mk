@@ -25,7 +25,10 @@ define add_prebuild_static_lib
   include $(PREBUILT_STATIC_LIBRARY)
 endef
 
-prebuild_static_libs := osrm protobuf tomcrypt jansson minizip fribidi freetype expat base coding geometry anim platform graphics indexer storage search routing gui render map stats_client succinct opening_hours
+prebuild_static_libs := map tracking routing traffic routing_common drape_frontend search storage
+prebuild_static_libs += ugc indexer drape platform editor partners_api local_ads mwm_diff bsdiff
+prebuild_static_libs += geometry coding base opening_hours pugixml oauthcpp expat freetype minizip
+prebuild_static_libs += jansson protobuf osrm stats_client succinct stb_image sdf_image icu agg
 
 $(foreach item,$(prebuild_static_libs),$(eval $(call add_prebuild_static_lib,$(item))))
 
@@ -40,7 +43,8 @@ LOCAL_CPP_FEATURES += exceptions rtti
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/../../
 
 LOCAL_MODULE := mapswithme
-LOCAL_STATIC_LIBRARIES := map render gui routing search storage indexer graphics platform anim geometry coding base expat freetype fribidi minizip jansson tomcrypt protobuf osrm stats_client succinct opening_hours
+LOCAL_STATIC_LIBRARIES := $(prebuild_static_libs)
+
 LOCAL_CFLAGS := -ffunction-sections -fdata-sections -Wno-extern-c-compat
 
 ifneq ($(NDK_DEBUG),1)
@@ -60,52 +64,66 @@ LOCAL_HEADER_FILES := \
 	../../private.h \
 	com/mapswithme/core/jni_helper.hpp \
 	com/mapswithme/core/logging.hpp \
-	com/mapswithme/core/render_context.hpp \
+	com/mapswithme/core/ScopedEnv.hpp \
+	com/mapswithme/core/ScopedLocalRef.hpp \
 	com/mapswithme/maps/Framework.hpp \
-	com/mapswithme/maps/MapStorage.hpp \
+	com/mapswithme/opengl/android_gl_utils.hpp \
+	com/mapswithme/opengl/androidoglcontext.hpp \
+	com/mapswithme/opengl/androidoglcontextfactory.hpp \
+	com/mapswithme/opengl/gl3stub.h \
+	com/mapswithme/platform/GuiThread.hpp \
 	com/mapswithme/platform/Platform.hpp \
-	com/mapswithme/platform/http_thread_android.hpp \
-	nv_thread/nv_thread.hpp \
-	nv_event/nv_event_queue.hpp \
-	nv_event/nv_event.hpp \
-	nv_event/nv_keycode_mapping.hpp \
-	nv_event/scoped_profiler.hpp
 
 LOCAL_SRC_FILES := \
 	com/mapswithme/core/jni_helper.cpp \
 	com/mapswithme/core/logging.cpp \
-	com/mapswithme/core/render_context.cpp \
-	com/mapswithme/country/country_helper.cpp \
-	com/mapswithme/country/CountryTree.cpp \
-	com/mapswithme/country/ActiveCountryTree.cpp \
-	com/mapswithme/maps/Framework.cpp \
 	com/mapswithme/maps/bookmarks/data/Bookmark.cpp \
 	com/mapswithme/maps/bookmarks/data/BookmarkManager.cpp \
 	com/mapswithme/maps/bookmarks/data/BookmarkCategory.cpp \
-	com/mapswithme/maps/sound/tts.cpp \
-	com/mapswithme/maps/VideoTimer.cpp \
-	com/mapswithme/maps/MapFragment.cpp \
-	com/mapswithme/maps/MwmApplication.cpp \
-	com/mapswithme/maps/Lifecycle.cpp \
+	com/mapswithme/maps/cian/Cian.cpp \
+	com/mapswithme/maps/DisplayedCategories.cpp \
+	com/mapswithme/maps/DownloadResourcesLegacyActivity.cpp \
+	com/mapswithme/maps/editor/OpeningHours.cpp \
+	com/mapswithme/maps/editor/Editor.cpp \
+	com/mapswithme/maps/editor/OsmOAuth.cpp \
+	com/mapswithme/maps/Framework.cpp \
 	com/mapswithme/maps/LocationState.cpp \
-	com/mapswithme/maps/MapStorage.cpp \
-	com/mapswithme/maps/DownloadResourcesActivity.cpp \
+	com/mapswithme/maps/LocationHelper.cpp \
+	com/mapswithme/maps/MapFragment.cpp \
+	com/mapswithme/maps/MapManager.cpp \
+	com/mapswithme/maps/MwmApplication.cpp \
 	com/mapswithme/maps/PrivateVariables.cpp \
 	com/mapswithme/maps/SearchEngine.cpp \
 	com/mapswithme/maps/SearchRecents.cpp \
 	com/mapswithme/maps/settings/UnitLocale.cpp \
-	com/mapswithme/platform/Platform.cpp \
+	com/mapswithme/maps/sound/tts.cpp \
+	com/mapswithme/maps/Sponsored.cpp \
+	com/mapswithme/maps/taxi/TaxiManager.cpp \
+	com/mapswithme/maps/TrackRecorder.cpp \
+	com/mapswithme/maps/TrafficState.cpp \
+	com/mapswithme/maps/ugc/UGC.cpp \
+	com/mapswithme/maps/UserMarkHelper.cpp \
+	com/mapswithme/maps/viator/Viator.cpp \
+	com/mapswithme/opengl/android_gl_utils.cpp \
+	com/mapswithme/opengl/androidoglcontext.cpp \
+	com/mapswithme/opengl/androidoglcontextfactory.cpp \
+	com/mapswithme/opengl/gl3stub.c \
 	com/mapswithme/platform/HttpThread.cpp \
+	com/mapswithme/platform/GuiThread.cpp \
 	com/mapswithme/platform/Language.cpp \
+	com/mapswithme/platform/MarketingService.cpp \
+	com/mapswithme/platform/Platform.cpp \
 	com/mapswithme/platform/PThreadImpl.cpp \
-	com/mapswithme/util/StringUtils.cpp \
+	com/mapswithme/platform/SecureStorage.cpp \
+	com/mapswithme/platform/SocketImpl.cpp \
 	com/mapswithme/util/Config.cpp \
-	nv_thread/nv_thread.cpp \
-	nv_event/nv_event_queue.cpp \
-	nv_event/nv_event.cpp \
-	nv_time/nv_time.cpp \
+	com/mapswithme/util/HttpClient.cpp \
+	com/mapswithme/util/LoggerFactory.cpp \
+	com/mapswithme/util/NetworkPolicy.cpp \
+	com/mapswithme/util/StringUtils.cpp \
+	com/mapswithme/util/statistics/PushwooshHelper.cpp \
 
-LOCAL_LDLIBS := -llog -lGLESv2 -latomic -lz
+LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv2 -latomic -lz
 
 LOCAL_LDLIBS += -Wl,--gc-sections
 

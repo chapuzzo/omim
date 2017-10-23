@@ -4,11 +4,11 @@
 #include "coding/file_name_utils.hpp"
 
 #include "base/logging.hpp"
-#include "base/regexp.hpp"
 #include "base/scope_guard.hpp"
 
 #include "std/algorithm.hpp"
 #include "std/cstring.hpp"
+#include "std/regex.hpp"
 #include "std/unique_ptr.hpp"
 
 #include <dirent.h>
@@ -39,6 +39,7 @@ void Platform::GetSystemFontNames(FilesList & res) const
 #if defined(OMIM_OS_MAC) || defined(OMIM_OS_IPHONE)
 #else
   char const * fontsWhitelist[] = {
+    "Roboto-Medium.ttf",
     "Roboto-Regular.ttf",
     "DroidSansFallback.ttf",
     "DroidSansFallbackFull.ttf",
@@ -144,11 +145,15 @@ Platform::EError Platform::GetFileType(string const & path, EFileType & type)
   return ERR_OK;
 }
 
+// static
 bool Platform::IsFileExistsByFullPath(string const & filePath)
 {
   struct stat s;
   return stat(filePath.c_str(), &s) == 0;
 }
+
+// static
+bool Platform::IsCustomTextureAllocatorSupported() { return true; }
 
 bool Platform::IsDirectoryEmpty(string const & directory)
 {
@@ -184,18 +189,36 @@ Platform::TStorageStatus Platform::GetWritableStorageStatus(uint64_t neededSize)
   struct statfs st;
   int const ret = statfs(m_writableDir.c_str(), &st);
 
-  LOG(LDEBUG, ("statfs return = ", ret,
-               "; block size = ", st.f_bsize,
-               "; blocks available = ", st.f_bavail));
+  LOG(LDEBUG, ("statfs return =", ret,
+               "; block size =", st.f_bsize,
+               "; blocks available =", st.f_bavail));
 
   if (ret != 0)
+  {
+    LOG(LERROR, ("Path:", m_writableDir, "statfs error:", ErrnoToError()));
     return STORAGE_DISCONNECTED;
+  }
 
   /// @todo May be add additional storage space.
   if (st.f_bsize * st.f_bavail < neededSize)
     return NOT_ENOUGH_SPACE;
 
   return STORAGE_OK;
+}
+
+uint64_t Platform::GetWritableStorageSpace() const
+{
+  struct statfs st;
+  int const ret = statfs(m_writableDir.c_str(), &st);
+
+  LOG(LDEBUG, ("statfs return =", ret,
+               "; block size =", st.f_bsize,
+               "; blocks available =", st.f_bavail));
+
+  if (ret != 0)
+    LOG(LERROR, ("Path:", m_writableDir, "statfs error:", ErrnoToError()));
+
+  return (ret != 0) ? 0 : st.f_bsize * st.f_bavail;
 }
 
 namespace pl
@@ -207,14 +230,13 @@ void EnumerateFilesByRegExp(string const & directory, string const & regexp,
   if (!dir)
     return;
 
-  regexp::RegExpT exp;
-  regexp::Create(regexp, exp);
+  regex exp(regexp);
 
   struct dirent * entry;
   while ((entry = readdir(dir.get())) != 0)
   {
     string const name(entry->d_name);
-    if (regexp::IsExist(name, exp))
+    if (regex_search(name.begin(), name.end(), exp))
       res.push_back(name);
   }
 }

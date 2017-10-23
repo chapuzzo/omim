@@ -1,17 +1,19 @@
-#include "routing/road_graph.hpp"
 #include "routing/routing_algorithm.hpp"
+
 #include "routing/base/astar_algorithm.hpp"
 #include "routing/base/astar_progress.hpp"
+#include "routing/road_graph.hpp"
 
 #include "base/assert.hpp"
 
-#include "indexer/mercator.hpp"
+#include "geometry/mercator.hpp"
 
 namespace routing
 {
 
 namespace
 {
+uint32_t constexpr kVisitPeriod = 4;
 float constexpr kProgressInterval = 2;
 
 double constexpr KMPH2MPS = 1000.0 / (60 * 60);
@@ -19,7 +21,13 @@ double constexpr KMPH2MPS = 1000.0 / (60 * 60);
 inline double TimeBetweenSec(Junction const & j1, Junction const & j2, double speedMPS)
 {
   ASSERT(speedMPS > 0.0, ());
-  return MercatorBounds::DistanceOnEarth(j1.GetPoint(), j2.GetPoint()) / speedMPS;
+  ASSERT_NOT_EQUAL(j1.GetAltitude(), feature::kInvalidAltitude, ());
+  ASSERT_NOT_EQUAL(j2.GetAltitude(), feature::kInvalidAltitude, ());
+
+  double const distanceM = MercatorBounds::DistanceOnEarth(j1.GetPoint(), j2.GetPoint());
+  double const altitudeDiffM =
+      static_cast<double>(j2.GetAltitude()) - static_cast<double>(j1.GetAltitude());
+  return sqrt(distanceM * distanceM + altitudeDiffM * altitudeDiffM) / speedMPS;
 }
 
 /// A class which represents an weighted edge used by RoadGraph.
@@ -43,6 +51,7 @@ class RoadGraph
 public:
   using TVertexType = Junction;
   using TEdgeType = WeightedEdge;
+  using TWeightType = double;
 
   RoadGraph(IRoadGraph const & roadGraph)
     : m_roadGraph(roadGraph)
@@ -128,13 +137,15 @@ IRoutingAlgorithm::Result AStarRoutingAlgorithm::CalculateRoute(IRoadGraph const
                                                                 Junction const & startPos,
                                                                 Junction const & finalPos,
                                                                 RouterDelegate const & delegate,
-                                                                vector<Junction> & path)
+                                                                RoutingResult<IRoadGraph::Vertex, IRoadGraph::Weight> & path)
 {
-  AStarProgress progress(0, 100);
+  AStarProgress progress(0, 95);
+  uint32_t visitCount = 0;
 
-  function<void(Junction const &, Junction const &)> onVisitJunctionFn =
-      [&delegate, &progress](Junction const & junction, Junction const & /* target */)
-  {
+  auto onVisitJunctionFn = [&](Junction const & junction, Junction const & /* target */) {
+    if (++visitCount % kVisitPeriod != 0)
+      return;
+
     delegate.OnPointCheck(junction.GetPoint());
     auto const lastValue = progress.GetLastValue();
     auto const newValue = progress.GetProgressForDirectedAlgo(junction.GetPoint());
@@ -145,8 +156,9 @@ IRoutingAlgorithm::Result AStarRoutingAlgorithm::CalculateRoute(IRoadGraph const
 
   my::Cancellable const & cancellable = delegate;
   progress.Initialize(startPos.GetPoint(), finalPos.GetPoint());
+  RoadGraph roadGraph(graph);
   TAlgorithmImpl::Result const res = TAlgorithmImpl().FindPath(
-      RoadGraph(graph), startPos, finalPos, path, cancellable, onVisitJunctionFn);
+      roadGraph, startPos, finalPos, path, cancellable, onVisitJunctionFn);
   return Convert(res);
 }
 
@@ -154,13 +166,15 @@ IRoutingAlgorithm::Result AStarRoutingAlgorithm::CalculateRoute(IRoadGraph const
 
 IRoutingAlgorithm::Result AStarBidirectionalRoutingAlgorithm::CalculateRoute(
     IRoadGraph const & graph, Junction const & startPos, Junction const & finalPos,
-    RouterDelegate const & delegate, vector<Junction> & path)
+    RouterDelegate const & delegate, RoutingResult<IRoadGraph::Vertex, IRoadGraph::Weight> & path)
 {
-  AStarProgress progress(0, 100);
+  AStarProgress progress(0, 95);
+  uint32_t visitCount = 0;
 
-  function<void(Junction const &, Junction const &)> onVisitJunctionFn =
-      [&delegate, &progress](Junction const & junction, Junction const & target)
-  {
+  auto onVisitJunctionFn = [&](Junction const & junction, Junction const & target) {
+    if (++visitCount % kVisitPeriod != 0)
+      return;
+
     delegate.OnPointCheck(junction.GetPoint());
     auto const lastValue = progress.GetLastValue();
     auto const newValue =
@@ -171,8 +185,9 @@ IRoutingAlgorithm::Result AStarBidirectionalRoutingAlgorithm::CalculateRoute(
 
   my::Cancellable const & cancellable = delegate;
   progress.Initialize(startPos.GetPoint(), finalPos.GetPoint());
+  RoadGraph roadGraph(graph);
   TAlgorithmImpl::Result const res = TAlgorithmImpl().FindPathBidirectional(
-      RoadGraph(graph), startPos, finalPos, path, cancellable, onVisitJunctionFn);
+      roadGraph, startPos, finalPos, path, cancellable, onVisitJunctionFn);
   return Convert(res);
 }
 

@@ -1,11 +1,13 @@
-#include "search/keyword_lang_matcher.hpp"
+#include "keyword_lang_matcher.hpp"
 
-#include "indexer/search_string_utils.hpp"
 #include "indexer/search_delimiters.hpp"
+#include "indexer/search_string_utils.hpp"
 
 #include "base/stl_add.hpp"
 
 #include "std/algorithm.hpp"
+#include "std/limits.hpp"
+#include "std/sstream.hpp"
 
 
 namespace search
@@ -52,7 +54,7 @@ int KeywordLangMatcher::GetLangScore(int8_t lang) const
 {
   int const prioritiesTiersCount = static_cast<int>(m_languagePriorities.size());
   for (int i = 0; i < prioritiesTiersCount; ++i)
-    for (int j = 0; j < m_languagePriorities[i].size(); ++j)
+    for (size_t j = 0; j < m_languagePriorities[i].size(); ++j)
       if (m_languagePriorities[i][j] == lang)
         return -i; // All languages in the same tier are equal.
 

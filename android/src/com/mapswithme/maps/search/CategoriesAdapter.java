@@ -1,20 +1,22 @@
 package com.mapswithme.maps.search;
 
 import android.content.res.Resources;
-import android.content.res.TypedArray;
+import android.support.annotation.DrawableRes;
+import android.support.annotation.NonNull;
+import android.support.annotation.StringRes;
 import android.support.v4.app.Fragment;
 import android.support.v7.widget.RecyclerView;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 import android.widget.TextView;
 
 import com.mapswithme.maps.R;
-import com.mapswithme.util.UiUtils;
+import com.mapswithme.maps.widget.placepage.Sponsored;
+import com.mapswithme.util.ThemeUtils;
 import com.mapswithme.util.statistics.Statistics;
 
-public class CategoriesAdapter extends RecyclerView.Adapter<CategoriesAdapter.ViewHolder>
+class CategoriesAdapter extends RecyclerView.Adapter<CategoriesAdapter.ViewHolder>
 {
   private final int mCategoryResIds[];
   private final int mIconResIds[];
@@ -22,30 +24,51 @@ public class CategoriesAdapter extends RecyclerView.Adapter<CategoriesAdapter.Vi
   private final LayoutInflater mInflater;
   private final Resources mResources;
 
-  public interface OnCategorySelectedListener
+  interface OnCategorySelectedListener
   {
     void onCategorySelected(String category);
   }
 
   private OnCategorySelectedListener mListener;
 
-  public CategoriesAdapter(Fragment fragment)
+  CategoriesAdapter(Fragment fragment)
   {
-    TypedArray categories = fragment.getActivity().getResources().obtainTypedArray(R.array.search_category_name_ids);
-    TypedArray icons = fragment.getActivity().getResources().obtainTypedArray(R.array.search_category_icon_ids);
-    int len = categories.length();
-    if (icons.length() != len)
-      throw new IllegalStateException("Categories and icons arrays must have the same length.");
+    final String packageName = fragment.getActivity().getPackageName();
+    final boolean isNightTheme = ThemeUtils.isNightTheme();
+    final Resources resources = fragment.getActivity().getResources();
 
-    mCategoryResIds = new int[len];
-    mIconResIds = new int[len];
-    for (int i = 0; i < len; i++)
+    final String[] keys = DisplayedCategories.getKeys();
+    final int numKeys = keys.length;
+
+    mCategoryResIds = new int[numKeys];
+    mIconResIds = new int[numKeys];
+    for (int i = 0; i < numKeys; i++)
     {
-      mCategoryResIds[i] = categories.getResourceId(i, 0);
-      mIconResIds[i] = icons.getResourceId(i, 0);
+      String key = keys[i];
+
+      mCategoryResIds[i] = resources.getIdentifier(key, "string", packageName);
+      if (mCategoryResIds[i] == 0)
+      {
+        // TODO: remove this code after "cian" feature is obsoleted.
+        if (key.equals("cian"))
+        {
+          Statistics.INSTANCE.trackSponsoredEvent(Statistics.EventName.SEARCH_SPONSOR_CATEGORY_SHOWN,
+                                                  Sponsored.TYPE_CIAN);
+          mCategoryResIds[i] = R.string.real_estate;
+        }
+        else
+        {
+          throw new IllegalStateException("Can't get string resource id for category:" + key);
+        }
+      }
+
+      String iconId = "ic_category_" + key;
+      if (isNightTheme)
+        iconId = iconId + "_night";
+      mIconResIds[i] = resources.getIdentifier(iconId, "drawable", packageName);
+      if (mIconResIds[i] == 0)
+        throw new IllegalStateException("Can't get icon resource id:" + iconId);
     }
-    categories.recycle();
-    icons.recycle();
 
     if (fragment instanceof OnCategorySelectedListener)
       mListener = (OnCategorySelectedListener) fragment;
@@ -54,17 +77,31 @@ public class CategoriesAdapter extends RecyclerView.Adapter<CategoriesAdapter.Vi
   }
 
   @Override
+  public int getItemViewType(int position)
+  {
+    if (mCategoryResIds[position] == R.string.real_estate)
+      return R.layout.item_search_category_cian;
+    return R.layout.item_search_category;
+  }
+
+  @Override
   public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType)
   {
-    final View view = mInflater.inflate(R.layout.item_search_category, parent, false);
-    return new ViewHolder(view);
+    final View view;
+    if (viewType == R.layout.item_search_category_cian)
+    {
+      view = mInflater.inflate(R.layout.item_search_category_cian, parent, false);
+      return new ViewHolder(view, (TextView) view.findViewById(R.id.tv__category));
+    }
+
+    view = mInflater.inflate(R.layout.item_search_category, parent, false);
+    return new ViewHolder(view, (TextView)view);
   }
 
   @Override
   public void onBindViewHolder(ViewHolder holder, int position)
   {
-    UiUtils.setTextAndShow(holder.mName, mResources.getString(mCategoryResIds[position]));
-    holder.mImageLeft.setImageResource(mIconResIds[position]);
+    holder.setTextAndIcon(mCategoryResIds[position], mIconResIds[position]);
   }
 
   @Override
@@ -75,20 +112,21 @@ public class CategoriesAdapter extends RecyclerView.Adapter<CategoriesAdapter.Vi
 
   private String getSuggestionFromCategory(int resId)
   {
+    if (resId == R.string.real_estate)
+      return "cian ";
     return mResources.getString(resId) + ' ';
   }
 
   public class ViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener
   {
-    public TextView mName;
-    public ImageView mImageLeft;
+    @NonNull
+    private final TextView mTitle;
 
-    public ViewHolder(View v)
+    ViewHolder(@NonNull View v, @NonNull TextView tv)
     {
       super(v);
       v.setOnClickListener(this);
-      mName = (TextView) v.findViewById(R.id.tv__search_category);
-      mImageLeft = (ImageView) v.findViewById(R.id.iv__search_category);
+      mTitle = tv;
     }
 
     @Override
@@ -98,6 +136,12 @@ public class CategoriesAdapter extends RecyclerView.Adapter<CategoriesAdapter.Vi
       Statistics.INSTANCE.trackSearchCategoryClicked(mResources.getResourceEntryName(mCategoryResIds[position]));
       if (mListener != null)
         mListener.onCategorySelected(getSuggestionFromCategory(mCategoryResIds[position]));
+    }
+
+    void setTextAndIcon(@StringRes int textResId, @DrawableRes int iconResId)
+    {
+      mTitle.setText(textResId);
+      mTitle.setCompoundDrawablesWithIntrinsicBounds(iconResId, 0, 0, 0);
     }
   }
 }

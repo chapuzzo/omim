@@ -1,44 +1,26 @@
-#include "result.hpp"
-#include "geometry_utils.hpp"
-#include "search_common.hpp"
+#include "search/result.hpp"
+
+#include "search/common.hpp"
+#include "search/geometry_utils.hpp"
 
 namespace search
 {
+// Result ------------------------------------------------------------------------------------------
 Result::Result(FeatureID const & id, m2::PointD const & pt, string const & str,
-               string const & region, string const & type, uint32_t featureType,
+               string const & address, string const & type, uint32_t featureType,
                Metadata const & meta)
   : m_id(id)
   , m_center(pt)
-  , m_str(str)
-  , m_region(region)
+  , m_str(str.empty() ? type : str)  //!< Features with empty names can be found after suggestion.
+  , m_address(address)
   , m_type(type)
   , m_featureType(featureType)
   , m_metadata(meta)
 {
-  Init(true /* metadataInitialized */);
 }
 
-Result::Result(FeatureID const & id, m2::PointD const & pt, string const & str, string const & type)
-  : m_id(id)
-  , m_center(pt)
-  , m_str(str)
-  , m_type(type)
-{
-  Init(false /* metadataInitialized */);
-}
-
-void Result::Init(bool metadataInitialized)
-{
-  // Features with empty names can be found after suggestion.
-  if (m_str.empty())
-    m_str = m_type;
-
-  m_metadata.m_isInitialized = metadataInitialized;
-}
-
-Result::Result(m2::PointD const & pt, string const & str,
-               string const & region, string const & type)
-  : m_center(pt), m_str(str), m_region(region), m_type(type)
+Result::Result(m2::PointD const & pt, string const & latlon, string const & address)
+  : m_center(pt), m_str(latlon), m_address(address)
 {
 }
 
@@ -48,9 +30,14 @@ Result::Result(string const & str, string const & suggest)
 }
 
 Result::Result(Result const & res, string const & suggest)
-  : m_id(res.m_id), m_center(res.m_center), m_str(res.m_str),
-    m_region(res.m_region), m_type(res.m_type), m_featureType(res.m_featureType),
-    m_suggestionStr(suggest), m_hightlightRanges(res.m_hightlightRanges)
+  : m_id(res.m_id)
+  , m_center(res.m_center)
+  , m_str(res.m_str)
+  , m_address(res.m_address)
+  , m_type(res.m_type)
+  , m_featureType(res.m_featureType)
+  , m_suggestionStr(suggest)
+  , m_hightlightRanges(res.m_hightlightRanges)
 {
 }
 
@@ -64,7 +51,7 @@ Result::ResultType Result::GetResultType() const
   if (idValid)
     return RESULT_FEATURE;
   else
-    return (m_type.empty() ? RESULT_LATLON : RESULT_ADDRESS);
+    return RESULT_LATLON;
 }
 
 bool Result::IsSuggest() const
@@ -77,9 +64,12 @@ bool Result::HasPoint() const
   return (GetResultType() != RESULT_SUGGEST_PURE);
 }
 
-FeatureID Result::GetFeatureID() const
+FeatureID const & Result::GetFeatureID() const
 {
-  ASSERT_EQUAL(GetResultType(), RESULT_FEATURE, ());
+#if defined(DEBUG)
+  auto const type = GetResultType();
+  ASSERT(type == RESULT_FEATURE, (type));
+#endif
   return m_id;
 }
 
@@ -106,24 +96,19 @@ bool Result::IsEqualFeature(Result const & r) const
   if (type != r.GetResultType())
     return false;
 
-  if (type == RESULT_ADDRESS)
-    return (PointDistance(m_center, r.m_center) < 50.0);
-  else
-  {
-    ASSERT_EQUAL(type, Result::RESULT_FEATURE, ());
+  ASSERT_EQUAL(type, Result::RESULT_FEATURE, ());
 
-    ASSERT(m_id.IsValid() && r.m_id.IsValid(), ());
-    if (m_id == r.m_id)
-      return true;
+  ASSERT(m_id.IsValid() && r.m_id.IsValid(), ());
+  if (m_id == r.m_id)
+    return true;
 
-    // This function is used to filter duplicate results in cases:
-    // - emitted World.mwm and Country.mwm
-    // - after additional search in all mwm
-    // so it's suitable here to test for 500m
-    return (m_str == r.m_str && m_region == r.m_region &&
-            m_featureType == r.m_featureType &&
-            PointDistance(m_center, r.m_center) < 500.0);
-  }
+  // This function is used to filter duplicate results in cases:
+  // - emitted World.mwm and Country.mwm
+  // - after additional search in all mwm
+  // so it's suitable here to test for 500m
+  return (m_str == r.m_str && m_address == r.m_address &&
+          m_featureType == r.m_featureType &&
+          PointDistance(m_center, r.m_center) < 500.0);
 }
 
 void Result::AddHighlightRange(pair<uint16_t, uint16_t> const & range)
@@ -139,51 +124,83 @@ pair<uint16_t, uint16_t> const & Result::GetHighlightRange(size_t idx) const
 
 void Result::AppendCity(string const & name)
 {
-  if (name.empty())
-    return;
-
-  if (m_region.empty())
-    m_region = name;
-  else
-    m_region += (", " + name);
+  // Prepend only if city is absent in region (mwm) name.
+  if (m_address.find(name) == string::npos)
+    m_address = name + ", " + m_address;
 }
 
-bool Results::AddResult(Result && res)
+string Result::ToStringForStats() const
+{
+  string s;
+  s.append(GetString());
+  s.append("|");
+  s.append(GetFeatureType());
+  s.append("|");
+  s.append(IsSuggest() ? "1" : "0");
+  return s;
+}
+
+// Results -----------------------------------------------------------------------------------------
+Results::Results()
+{
+  Clear();
+}
+
+bool Results::AddResult(Result && result)
 {
   // Find first feature result.
-  auto it = find_if(m_vec.begin(), m_vec.end(), [](Result const & r)
+  auto it = find_if(m_results.begin(), m_results.end(), [](Result const & r)
   {
     switch (r.GetResultType())
     {
     case Result::RESULT_FEATURE:
-    case Result::RESULT_ADDRESS:
       return true;
     default:
       return false;
     }
   });
 
-  if (res.IsSuggest())
+  if (result.IsSuggest())
   {
-    if (distance(m_vec.begin(), it) >= MAX_SUGGESTS_COUNT)
+    if (distance(m_results.begin(), it) >= MAX_SUGGESTS_COUNT)
       return false;
 
-    for (auto i = m_vec.begin(); i != it; ++i)
-      if (res.IsEqualSuggest(*i))
+    for (auto i = m_results.begin(); i != it; ++i)
+      if (result.IsEqualSuggest(*i))
         return false;
-
-    m_vec.insert(it, move(res));
+    InsertResult(it, move(result));
   }
   else
   {
-    for (; it != m_vec.end(); ++it)
-      if (res.IsEqualFeature(*it))
+    for (; it != m_results.end(); ++it)
+    {
+      if (result.IsEqualFeature(*it))
         return false;
-
-    m_vec.push_back(move(res));
+    }
+    InsertResult(m_results.end(), move(result));
   }
 
   return true;
+}
+
+void Results::AddResultNoChecks(Result && result)
+{
+  InsertResult(m_results.end(), move(result));
+}
+
+void Results::AddResultsNoChecks(ConstIter first, ConstIter last)
+{
+  while (first != last)
+  {
+    auto resultCopy = *first++;
+    AddResultNoChecks(move(resultCopy));
+  }
+}
+
+void Results::Clear()
+{
+  m_results.clear();
+  m_status = Status::None;
 }
 
 size_t Results::GetSuggestsCount() const
@@ -191,7 +208,7 @@ size_t Results::GetSuggestsCount() const
   size_t res = 0;
   for (size_t i = 0; i < GetCount(); i++)
   {
-    if (m_vec[i].IsSuggest())
+    if (m_results[i].IsSuggest())
       ++res;
     else
     {
@@ -202,24 +219,22 @@ size_t Results::GetSuggestsCount() const
   return res;
 }
 
-////////////////////////////////////////////////////////////////////////////////////
-// AddressInfo implementation
-////////////////////////////////////////////////////////////////////////////////////
-
-void AddressInfo::MakeFrom(Result const & res)
+void Results::InsertResult(vector<Result>::iterator where, Result && result)
 {
-  ASSERT_NOT_EQUAL(res.GetResultType(), Result::RESULT_SUGGEST_PURE, ());
+  ASSERT_LESS(m_results.size(), numeric_limits<int32_t>::max(), ());
 
-  string const & type = res.GetFeatureType();
-  if (!type.empty())
-    m_types.push_back(type);
+  for (auto it = where; it != m_results.end(); ++it)
+  {
+    auto & r = *it;
+    auto const position = r.GetPositionInResults();
+    r.SetPositionInResults(position + 1);
+  }
 
-  // assign name if it's not equal with type
-  string const & name = res.GetString();
-  if (name != type)
-    m_name = name;
+  result.SetPositionInResults(static_cast<int32_t>(distance(m_results.begin(), where)));
+  m_results.insert(where, move(result));
 }
 
+// AddressInfo -------------------------------------------------------------------------------------
 bool AddressInfo::IsEmptyName() const
 {
   return m_name.empty() && m_house.empty();
@@ -250,15 +265,32 @@ string AddressInfo::FormatPinText() const
   return (ret.empty() ? type : (ret + " (" + type + ')'));
 }
 
-string AddressInfo::FormatAddress() const
+string AddressInfo::FormatHouseAndStreet(AddressType type /* = DEFAULT */) const
 {
-  string result = m_house;
-  if (!m_street.empty())
+  // Check whether we can format address according to the query type and actual address distance.
+  /// @todo We can add "Near" prefix here in future according to the distance.
+  if (m_distanceMeters > 0.0)
+  {
+    if (type == SEARCH_RESULT && m_distanceMeters > 50.0)
+      return string();
+    if (m_distanceMeters > 200.0)
+      return string();
+  }
+
+  string result = m_street;
+  if (!m_house.empty())
   {
     if (!result.empty())
-      result += ' ';
-    result += m_street;
+      result += ", ";
+    result += m_house;
   }
+
+  return result;
+}
+
+string AddressInfo::FormatAddress(AddressType type /* = DEFAULT */) const
+{
+  string result = FormatHouseAndStreet(type);
   if (!m_city.empty())
   {
     if (!result.empty())
@@ -274,6 +306,12 @@ string AddressInfo::FormatAddress() const
   return result;
 }
 
+string AddressInfo::FormatNameAndAddress(AddressType type /* = DEFAULT */) const
+{
+  string const addr = FormatAddress(type);
+  return (m_name.empty() ? addr : m_name + ", " + addr);
+}
+
 string AddressInfo::FormatTypes() const
 {
   string result;
@@ -285,12 +323,6 @@ string AddressInfo::FormatTypes() const
     result += m_types[i];
   }
   return result;
-}
-
-string AddressInfo::FormatNameAndAddress() const
-{
-  string const addr = FormatAddress();
-  return (m_name.empty() ? addr : m_name + ", " + addr);
 }
 
 string AddressInfo::GetBestType() const
@@ -313,4 +345,14 @@ void AddressInfo::Clear()
   m_types.clear();
 }
 
+string DebugPrint(AddressInfo const & info)
+{
+  return info.FormatNameAndAddress();
+}
+
+string DebugPrint(Result const & result)
+{
+  return "Result { Name: " + result.GetString() + "; Type: " + result.GetFeatureType() +
+         "; Info: " + DebugPrint(result.GetRankingInfo()) + " }";
+}
 }  // namespace search

@@ -1,18 +1,19 @@
 #include "generator/coastlines_generator.hpp"
 #include "generator/feature_builder.hpp"
 
-#include "indexer/point_to_int64.hpp"
+#include "coding/point_to_integer.hpp"
 
 #include "geometry/region2d/binary_operators.hpp"
 
 #include "base/string_utils.hpp"
 #include "base/logging.hpp"
 
-#include "std/bind.hpp"
-#include "std/condition_variable.hpp"
-#include "std/function.hpp"
-#include "std/thread.hpp"
-#include "std/utility.hpp"
+#include <condition_variable>
+#include <functional>
+#include <thread>
+#include <utility>
+
+using namespace std;
 
 typedef m2::RegionI RegionT;
 typedef m2::PointI PointT;
@@ -109,7 +110,12 @@ namespace
         m_rMain.AddRegionToTree(fb);
       else
       {
-        LOG(LINFO, ("Not merged coastline", fb.GetOsmIdsString()));
+        osm::Id const firstWay = fb.GetFirstOsmId();
+        osm::Id const lastWay = fb.GetLastOsmId();
+        if (firstWay == lastWay)
+          LOG(LINFO, ("Not merged coastline, way", firstWay.OsmId(), "(", fb.GetPointsCount(), "points)"));
+        else
+          LOG(LINFO, ("Not merged coastline, ways", firstWay.OsmId(), "to", lastWay.OsmId(), "(", fb.GetPointsCount(), "points)"));
         ++m_notMergedCoastsCount;
         m_totalNotMergedCoastsPoints += fb.GetPointsCount();
       }
@@ -267,7 +273,7 @@ public:
     // Do 'and' with all regions and accumulate the result, including bound region.
     // In 'odd' parts we will have an ocean.
     DoDifference doDiff(rectR);
-    m_index.ForEachInRect(GetLimitRect(rectR), bind<void>(ref(doDiff), _1));
+    m_index.ForEachInRect(GetLimitRect(rectR), bind<void>(ref(doDiff), placeholders::_1));
 
     // Check if too many points for feature.
     if (cell.Level() < kHighLevel && doDiff.GetPointsCount() >= kMaxPoints)
@@ -318,7 +324,7 @@ void CoastlineFeaturesGenerator::GetFeatures(vector<FeatureBuilder1> & features)
       [&features, &featuresMutex, this](RegionInCellSplitter::TCell const & cell, DoDifference & cellData)
       {
         FeatureBuilder1 fb;
-        fb.SetCoastCell(cell.ToInt64(RegionInCellSplitter::kHighLevel + 1), cell.ToString());
+        fb.SetCoastCell(cell.ToInt64(RegionInCellSplitter::kHighLevel + 1));
 
         cellData.AssignGeometry(fb);
         fb.SetArea();

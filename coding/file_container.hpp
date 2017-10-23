@@ -5,6 +5,7 @@
 #include "std/vector.hpp"
 #include "std/string.hpp"
 #include "std/noncopyable.hpp"
+#include "std/utility.hpp"
 
 
 class FilesContainerBase
@@ -105,14 +106,14 @@ public:
 class FilesContainerR : public FilesContainerBase
 {
 public:
-  typedef ModelReaderPtr ReaderT;
+  using TReader = ModelReaderPtr;
 
   explicit FilesContainerR(string const & filePath,
                            uint32_t logPageSize = 10,
                            uint32_t logPageCount = 10);
-  explicit FilesContainerR(ReaderT const & file);
+  explicit FilesContainerR(TReader const & file);
 
-  ReaderT GetReader(Tag const & tag) const;
+  TReader GetReader(Tag const & tag) const;
 
   template <typename F> void ForEachTag(F f) const
   {
@@ -126,12 +127,11 @@ public:
   pair<uint64_t, uint64_t> GetAbsoluteOffsetAndSize(Tag const & tag) const;
 
 private:
-  ReaderT m_source;
+  TReader m_source;
 };
 
 namespace detail
 {
-
 class MappedFile
 {
   DISALLOW_COPY(MappedFile);
@@ -238,6 +238,7 @@ public:
   void Write(string const & fPath, Tag const & tag);
   void Write(ModelReaderPtr reader, Tag const & tag);
   void Write(vector<char> const & buffer, Tag const & tag);
+  void Write(vector<uint8_t> const & buffer, Tag const & tag);
 
   void Finish();
 

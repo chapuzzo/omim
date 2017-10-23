@@ -6,29 +6,33 @@ CONFIG -= app_bundle
 TEMPLATE = app
 
 ROOT_DIR = ../..
-DEPENDENCIES = generator routing search storage stats_client jansson indexer platform geometry coding base \
-               tess2 protobuf tomcrypt
 
-!linux* {
-  DEPENDENCIES += opening_hours \
-
-}
+DEPENDENCIES = generator_tests_support search_tests_support indexer_tests_support generator \
+               routing routing_common search storage stats_client indexer platform editor mwm_diff \
+               bsdiff geometry coding base tess2 protobuf jansson succinct pugixml opening_hours icu
 
 include($$ROOT_DIR/common.pri)
 
 QT *= core
 
-macx-*: LIBS *= "-framework IOKit"
+macx-* {
+  QT *= gui widgets # needed for QApplication with event loop, to test async events (downloader, etc.)
+  LIBS *= "-framework IOKit" "-framework QuartzCore" "-framework Cocoa" "-framework SystemConfiguration"
+}
+win32*|linux* {
+  QT *= network
+}
 
 SOURCES += \
     ../../testing/testingmain.cpp \
-    retrieval_test.cpp \
+    downloader_search_test.cpp \
+    generate_tests.cpp \
+    helpers.cpp \
+    interactive_search_test.cpp \
+    pre_ranker_test.cpp \
+    processor_test.cpp \
+    search_edited_features_test.cpp \
     smoke_test.cpp \
-    test_mwm_builder.cpp \
-    test_search_engine.cpp \
-    test_search_request.cpp \
 
 HEADERS += \
-    test_mwm_builder.hpp \
-    test_search_engine.hpp \
-    test_search_request.hpp \
+    helpers.hpp \

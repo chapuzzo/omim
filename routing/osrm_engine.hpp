@@ -3,6 +3,8 @@
 #include "routing/osrm2feature_map.hpp"
 #include "routing/osrm_data_facade.hpp"
 
+#include "indexer/index.hpp"
+
 #include "geometry/point2d.hpp"
 
 #include "std/vector.hpp"
@@ -17,7 +19,7 @@ struct FeatureGraphNode
   PhantomNode node;
   OsrmMappingTypes::FtSeg segment;
   m2::PointD segmentPoint;
-  string mwmName;
+  Index::MwmId mwmId;
 
   /*!
   * \brief fill FeatureGraphNode with values.
@@ -25,10 +27,10 @@ struct FeatureGraphNode
   * \param isStartNode true if this node will first in the path.
   * \param mwmName @nodeId refers node on the graph of this map.
   */
-  FeatureGraphNode(NodeID const nodeId, bool const isStartNode, string const & mwmName);
+  FeatureGraphNode(NodeID const nodeId, bool const isStartNode, Index::MwmId const & id);
 
   FeatureGraphNode(NodeID const nodeId, NodeID const reverseNodeId, bool const isStartNode,
-                   string const & mwmName);
+                   Index::MwmId const & id);
 
   /// \brief Invalid graph node constructor
   FeatureGraphNode();
@@ -41,7 +43,7 @@ struct FeatureGraphNode
 struct RawPathData
 {
   NodeID node;
-  EdgeWeight segmentWeight;
+  EdgeWeight segmentWeight;  // Time in tenths of a second to pass |node|.
 
   RawPathData() : node(SPECIAL_NODEID), segmentWeight(INVALID_EDGE_WEIGHT) {}
 
@@ -49,22 +51,6 @@ struct RawPathData
       : node(node), segmentWeight(segmentWeight)
   {
   }
-};
-
-/*!
- * \brief The OSRM routing result struct. Contains the routing result, it's cost and source and
- * target edges.
- * \property shortestPathLength Length of a founded route.
- * \property unpackedPathSegments Segments of a founded route.
- * \property sourceEdge Source graph node of a route.
- * \property targetEdge Target graph node of a route.
- */
-struct RawRoutingResult
-{
-  int shortestPathLength;
-  vector<vector<RawPathData>> unpackedPathSegments;
-  FeatureGraphNode sourceEdge;
-  FeatureGraphNode targetEdge;
 };
 
 //@todo (dragunov) make proper name
@@ -85,15 +71,4 @@ using TRawDataFacade = OsrmRawDataFacade<QueryEdge::EdgeData>;
    */
 void FindWeightsMatrix(TRoutingNodes const & sources, TRoutingNodes const & targets,
                        TRawDataFacade & facade, vector<EdgeWeight> & result);
-
-/*! Find single shortest path in a single MWM between 2 OSRM nodes
-   * \param source Source OSRM graph node to make path.
-   * \param taget Target OSRM graph node to make path.
-   * \param facade OSRM routing data facade to recover graph information.
-   * \param rawRoutingResult Routing result structure.
-   * \return true when path exists, false otherwise.
-   */
-bool FindSingleRoute(FeatureGraphNode const & source, FeatureGraphNode const & target,
-                     TRawDataFacade & facade, RawRoutingResult & rawRoutingResult);
-
 }  // namespace routing

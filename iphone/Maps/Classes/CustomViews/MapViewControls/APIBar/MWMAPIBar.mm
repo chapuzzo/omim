@@ -1,6 +1,7 @@
-#import "Common.h"
 #import "MWMAPIBar.h"
 #import "MWMAPIBarView.h"
+#import "MWMCommon.h"
+#import "Statistics.h"
 
 #include "Framework.h"
 
@@ -28,7 +29,7 @@ static NSString * const kKeyPath = @"subviews";
   if (self)
   {
     self.controller = controller;
-    [[NSBundle mainBundle] loadNibNamed:@"MWMAPIBarView" owner:self options:nil];
+    [NSBundle.mainBundle loadNibNamed:@"MWMAPIBarView" owner:self options:nil];
 
     self.timeFormatter = [[NSDateFormatter alloc] init];
     self.timeFormatter.dateStyle = NSDateFormatterNoStyle;
@@ -51,15 +52,14 @@ static NSString * const kKeyPath = @"subviews";
 
 - (IBAction)back
 {
-  auto & f = GetFramework();
-  auto & bm = f.GetBalloonManager();
-  bm.RemovePin();
-  bm.Dismiss();
-  f.GetBookmarkManager().UserMarksClear(UserMarkContainer::API_MARK);
-  f.Invalidate();
+  [Statistics logEvent:kStatEventName(kStatAPI, kStatBack)];
+  Framework & f = GetFramework();
+  f.DeactivateMapSelection(true);
+  UserMarkNotificationGuard guard(f.GetBookmarkManager(), UserMark::Type::API);
+  guard.m_controller.Clear();
   self.isVisible = NO;
   NSURL * url = [NSURL URLWithString:@(f.GetApiDataHolder().GetGlobalBackUrl().c_str())];
-  [[UIApplication sharedApplication] openURL:url];
+  [UIApplication.sharedApplication openURL:url];
 }
 
 #pragma mark - Properties
@@ -68,7 +68,7 @@ static NSString * const kKeyPath = @"subviews";
 
 - (BOOL)isVisible
 {
-  if (isIOSVersionLessThan(9))
+  if (isIOS8)
     return _isVisible;
   return NO;
 }
@@ -77,20 +77,21 @@ static NSString * const kKeyPath = @"subviews";
 {
   // Status bar in iOS 9 already provides back button if the app has been launched from another app.
   // For iOS version less than 9 we just try to mimic the default iOS 9 status bar.
-  if (!isIOSVersionLessThan(9))
+  if (!isIOS8)
     return;
   if (_isVisible == isVisible)
     return;
   _isVisible = isVisible;
+  UIViewController * controller = self.controller;
   if (isVisible)
   {
     self.backLabel.text = [NSString
         stringWithFormat:L(@"back_to"), @(GetFramework().GetApiDataHolder().GetAppTitle().c_str())];
-    [self.controller.view addSubview:self.rootView];
-    [self.controller.view addObserver:self
-                           forKeyPath:kKeyPath
-                              options:NSKeyValueObservingOptionNew
-                              context:nullptr];
+    [controller.view addSubview:self.rootView];
+    [controller.view addObserver:self
+                      forKeyPath:kKeyPath
+                         options:NSKeyValueObservingOptionNew
+                         context:nullptr];
     [self timerUpdate];
     self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0
                                                   target:self
@@ -100,11 +101,11 @@ static NSString * const kKeyPath = @"subviews";
   }
   else
   {
-    [self.rootView.superview removeObserver:self forKeyPath:kKeyPath];
+    [controller.view removeObserver:self forKeyPath:kKeyPath];
     [self.rootView removeFromSuperview];
     [self.timer invalidate];
   }
-  [self.controller setNeedsStatusBarAppearanceUpdate];
+  [controller setNeedsStatusBarAppearanceUpdate];
 }
 
 @end

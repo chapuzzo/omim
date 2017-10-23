@@ -74,8 +74,7 @@ UNIT_TEST(MultilangString_ForEach)
   for (size_t i = 0; i < ARRAY_SIZE(gArr); ++i)
     s.AddString(gArr[i].m_lang, gArr[i].m_str);
 
-  LangChecker doClass;
-  s.ForEachRef(doClass);
+  s.ForEach(LangChecker());
 }
 
 UNIT_TEST(MultilangString_Unique)
@@ -102,4 +101,32 @@ UNIT_TEST(MultilangString_Unique)
   TEST_EQUAL(cmp, "x", ());
   TEST(s.GetString(1, cmp), ());
   TEST_EQUAL(cmp, "yyy", ());
+}
+
+UNIT_TEST(MultilangString_LangNames)
+{
+  // It is important to compare the contents of the strings, and not just pointers
+  TEST_EQUAL(string("Беларуская"), StringUtf8Multilang::GetLangNameByCode(StringUtf8Multilang::GetLangIndex("be")), ());
+
+  auto const & langs = StringUtf8Multilang::GetSupportedLanguages();
+  // Using size_t workaround, because our logging/testing macroses do not support passing POD types by value,
+  // only by reference. And our constant is a constexpr.
+  TEST_EQUAL(langs.size(), size_t(StringUtf8Multilang::kMaxSupportedLanguages), ());
+  auto const international = StringUtf8Multilang::GetLangIndex("int_name");
+  TEST_EQUAL(langs[international].m_code, string("int_name"), ());
+}
+
+UNIT_TEST(MultilangString_HasString)
+{
+  StringUtf8Multilang s;
+  s.AddString(0, "xxx");
+  s.AddString(18, "yyy");
+  s.AddString(63, "zzz");
+  
+  TEST(s.HasString(0), ());
+  TEST(s.HasString(18), ());
+  TEST(s.HasString(63), ());
+  
+  TEST(!s.HasString(1), ());
+  TEST(!s.HasString(32), ());
 }

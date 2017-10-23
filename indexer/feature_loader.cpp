@@ -1,17 +1,20 @@
-#include "base/SRC_FIRST.hpp"
-
-#include "indexer/feature_loader.hpp"
-#include "indexer/feature.hpp"
-#include "indexer/scales.hpp"
-#include "indexer/geometry_serialization.hpp"
 #include "indexer/classificator.hpp"
+#include "indexer/feature.hpp"
+#include "indexer/feature_loader.hpp"
+#include "indexer/geometry_serialization.hpp"
+#include "indexer/scales.hpp"
 
 #include "geometry/pointu_to_uint64.hpp"
 
 #include "coding/byte_stream.hpp"
 #include "coding/dd_vector.hpp"
 
+#include "base/assert.hpp"
 #include "base/logging.hpp"
+
+#include "std/algorithm.hpp"
+#include "std/limits.hpp"
+
 #include "defines.hpp"
 
 namespace feature
@@ -190,7 +193,7 @@ uint32_t LoaderCurrent::ParseGeometry(int scale)
       int const ind = GetScaleIndex(scale, m_ptsOffsets);
       if (ind != -1)
       {
-        ReaderSource<FilesContainerR::ReaderT> src(m_Info.GetGeometryReader(ind));
+        ReaderSource<FilesContainerR::TReader> src(m_Info.GetGeometryReader(ind));
         src.Skip(m_ptsOffsets[ind]);
 
         serial::CodingParams cp = GetCodingParams(ind);
@@ -211,10 +214,10 @@ uint32_t LoaderCurrent::ParseGeometry(int scale)
       ASSERT_LESS ( scaleIndex, m_Info.GetScalesCount(), () );
 
       points.push_back(m_pF->m_points.front());
-      for (int i = 1; i < count-1; ++i)
+      for (size_t i = 1; i + 1 < count; ++i)
       {
         // check for point visibility in needed scaleIndex
-        if (((m_ptsSimpMask >> (2*(i-1))) & 0x3) <= scaleIndex)
+        if (static_cast<int>((m_ptsSimpMask >> (2 * (i - 1))) & 0x3) <= scaleIndex)
           points.push_back(m_pF->m_points[i]);
       }
       points.push_back(m_pF->m_points.back());
@@ -235,10 +238,10 @@ uint32_t LoaderCurrent::ParseTriangles(int scale)
   {
     if (m_pF->m_triangles.empty())
     {
-      uint32_t const ind = GetScaleIndex(scale, m_trgOffsets);
+      auto const ind = GetScaleIndex(scale, m_trgOffsets);
       if (ind != -1)
       {
-        ReaderSource<FilesContainerR::ReaderT> src(m_Info.GetTrianglesReader(ind));
+        ReaderSource<FilesContainerR::TReader> src(m_Info.GetTrianglesReader(ind));
         src.Skip(m_trgOffsets[ind]);
         serial::LoadOuterTriangles(src, GetCodingParams(ind), m_pF->m_triangles);
 
@@ -256,19 +259,29 @@ void LoaderCurrent::ParseMetadata()
 {
   try
   {
-    typedef pair<uint32_t, uint32_t> IdxElementT;
-    DDVector<IdxElementT, FilesContainerR::ReaderT> idx(m_Info.GetMetadataIndexReader());
-    
-    auto it = lower_bound(idx.begin(), idx.end()
-                          , make_pair(uint32_t(m_pF->m_id.m_index), uint32_t(0))
-                          , [](IdxElementT const & v1, IdxElementT const & v2) { return v1.first < v2.first; }
-                          );
-
-    if (it != idx.end() && m_pF->m_id.m_index == it->first)
+    struct TMetadataIndexEntry
     {
-      ReaderSource<FilesContainerR::ReaderT> reader(m_Info.GetMetadataReader());
-      reader.Skip(it->second);
-      m_pF->GetMetadata().DeserializeFromMWM(reader);
+      uint32_t key;
+      uint32_t value;
+    };
+    DDVector<TMetadataIndexEntry, FilesContainerR::TReader> idx(m_Info.GetMetadataIndexReader());
+
+    auto it = lower_bound(
+        idx.begin(), idx.end(),
+        TMetadataIndexEntry{static_cast<uint32_t>(m_pF->m_id.m_index), 0},
+        [](TMetadataIndexEntry const & v1, TMetadataIndexEntry const & v2)
+        {
+          return v1.key < v2.key;
+        });
+
+    if (it != idx.end() && m_pF->m_id.m_index == it->key)
+    {
+      ReaderSource<FilesContainerR::TReader> src(m_Info.GetMetadataReader());
+      src.Skip(it->value);
+      if (m_Info.GetMWMFormat() >= version::Format::v8)
+        m_pF->m_metadata.Deserialize(src);
+      else
+        m_pF->m_metadata.DeserializeFromMWMv7OrLower(src);
     }
   }
   catch (Reader::OpenException const &)
@@ -288,8 +301,8 @@ int LoaderCurrent::GetScaleIndex(int scale) const
 
   switch (scale)
   {
-  case -2: return 0;
-  case -1: return count-1;
+  case FeatureType::WORST_GEOMETRY: return 0;
+  case FeatureType::BEST_GEOMETRY: return count - 1;
   default:
     for (int i = 0; i < count; ++i)
       if (scale <= m_Info.GetScale(i))
@@ -310,13 +323,13 @@ int LoaderCurrent::GetScaleIndex(int scale, offsets_t const & offsets) const
 
   switch (scale)
   {
-  case -1:
+  case FeatureType::BEST_GEOMETRY:
     // Choose the best existing geometry for the last visible scale.
-    ind = count-1;
+    ind = count - 1;
     while (ind >= 0 && offsets[ind] == s_InvalidOffset) --ind;
     break;
 
-  case -2:
+  case FeatureType::WORST_GEOMETRY:
     // Choose the worst existing geometry for the first visible scale.
     ind = 0;
     while (ind < count && offsets[ind] == s_InvalidOffset) ++ind;

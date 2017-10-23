@@ -1,74 +1,75 @@
 #include "drape/gpu_program_manager.hpp"
-#include "drape/shader_def.hpp"
+#include "drape/glfunctions.hpp"
+#include "drape/support_manager.hpp"
 
+#include "base/logging.hpp"
 #include "base/stl_add.hpp"
-#include "base/assert.hpp"
+
+#include <algorithm>
 
 namespace dp
 {
-
-namespace
-{
-
-class ShaderMapper
-{
-public:
-  ShaderMapper()
-  {
-    gpu::InitGpuProgramsLib(m_mapping);
-  }
-
-  gpu::ProgramInfo const & GetShaders(int program) const
-  {
-    map<int, gpu::ProgramInfo>::const_iterator it = m_mapping.find(program);
-    ASSERT(it != m_mapping.end(), ());
-    return it->second;
-  }
-
-private:
-  map<int, gpu::ProgramInfo> m_mapping;
-};
-
-static ShaderMapper s_mapper;
-
-} // namespace
-
 GpuProgramManager::~GpuProgramManager()
 {
-  (void)GetRangeDeletor(m_programs, MasterPointerDeleter())();
-  (void)GetRangeDeletor(m_shaders, MasterPointerDeleter())();
+  m_programs.clear();
+  m_shaders.clear();
 }
 
-RefPointer<GpuProgram> GpuProgramManager::GetProgram(int index)
+void GpuProgramManager::Init(drape_ptr<gpu::GpuProgramGetter> && programGetter)
 {
-  program_map_t::iterator it = m_programs.find(index);
-  if (it != m_programs.end())
-    return it->second.GetRefPointer();
+  m_programGetter = std::move(programGetter);
+  ASSERT(m_programGetter != nullptr, ());
 
-  gpu::ProgramInfo const & programInfo = s_mapper.GetShaders(index);
-  RefPointer<Shader> vertexShader = GetShader(programInfo.m_vertexIndex,
-                                              programInfo.m_vertexSource,
-                                              Shader::VertexShader);
-  RefPointer<Shader> fragmentShader = GetShader(programInfo.m_fragmentIndex,
-                                                programInfo.m_fragmentSource,
-                                                Shader::FragmentShader);
-
-  MasterPointer<GpuProgram> & result = m_programs[index];
-  result.Reset(new GpuProgram(vertexShader, fragmentShader));
-  return result.GetRefPointer();
-}
-
-RefPointer<Shader> GpuProgramManager::GetShader(int index, string const & source, Shader::Type t)
-{
-  shader_map_t::iterator it = m_shaders.find(index);
-  if (it == m_shaders.end())
+  // This feature is not supported on some Android devices (especially on Android 4.x version).
+  // Since we can't predict on which devices it'll work fine, we have to turn off for all devices.
+#if !defined(OMIM_OS_ANDROID)
+  if (GLFunctions::glGetInteger(gl_const::GLMaxVertexTextures) > 0)
   {
-    MasterPointer<Shader> & shader = m_shaders[index];
-    shader.Reset(new Shader(source, t));
-    return shader.GetRefPointer();
+    LOG(LINFO, ("VTF enabled"));
+    m_globalDefines.append("#define ENABLE_VTF\n");  // VTF == Vetrex Texture Fetch
   }
-  else
-    return it->second.GetRefPointer();
+#endif
+
+  if (SupportManager::Instance().IsSamsungGoogleNexus())
+  {
+    m_minTextureSlotsCount = 1;
+    m_globalDefines.append("#define SAMSUNG_GOOGLE_NEXUS\n");
+  }
+
+  if (GLFunctions::CurrentApiVersion == dp::ApiVersion::OpenGLES3)
+    m_globalDefines.append("#define GLES3\n");
 }
 
-} // namespace dp
+ref_ptr<GpuProgram> GpuProgramManager::GetProgram(int index)
+{
+  auto it = m_programs.find(index);
+  if (it != m_programs.end())
+    return make_ref(it->second);
+
+  auto const & programInfo = m_programGetter->GetProgramInfo(index);
+  auto vertexShader = GetShader(programInfo.m_vertexIndex, programInfo.m_vertexSource,
+                                Shader::Type::VertexShader);
+  auto fragmentShader = GetShader(programInfo.m_fragmentIndex, programInfo.m_fragmentSource,
+                                  Shader::Type::FragmentShader);
+
+  auto const textureSlotsCount = std::max(m_minTextureSlotsCount, programInfo.m_textureSlotsCount);
+  drape_ptr<GpuProgram> program = make_unique_dp<GpuProgram>(index, vertexShader, fragmentShader,
+                                                             textureSlotsCount);
+  ref_ptr<GpuProgram> result = make_ref(program);
+  m_programs.emplace(index, move(program));
+
+  return result;
+}
+
+ref_ptr<Shader> GpuProgramManager::GetShader(int index, string const & source, Shader::Type t)
+{
+  auto it = m_shaders.find(index);
+  if (it != m_shaders.end())
+    return make_ref(it->second);
+
+  drape_ptr<Shader> shader = make_unique_dp<Shader>(source, m_globalDefines, t);
+  ref_ptr<Shader> result = make_ref(shader);
+  m_shaders.emplace(index, move(shader));
+  return result;
+}
+}  // namespace dp

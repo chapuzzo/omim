@@ -1,9 +1,9 @@
 #import "MWMTextView.h"
-#import "Common.h"
+#import "MWMCommon.h"
 
 @interface MWMTextView ()
 
-@property (nonatomic) UILabel * placeholderView;
+@property (nonatomic, readwrite) UILabel * placeholderView;
 
 @end
 
@@ -11,14 +11,23 @@
 
 - (void)awakeFromNib
 {
+  [super awakeFromNib];
   [self setTextContainerInset:UIEdgeInsetsZero];
 
   [self updatePlaceholderVisibility];
 
-  NSNotificationCenter * defaultCenter = [NSNotificationCenter defaultCenter];
-  [defaultCenter addObserver:self selector:@selector(textDidChange:)
-                        name:UITextViewTextDidChangeNotification object:self];
+  [NSNotificationCenter.defaultCenter addObserver:self
+                                         selector:@selector(textDidChange:)
+                                             name:UITextViewTextDidChangeNotification
+                                           object:self];
   self.clipsToBounds = YES;
+}
+
+- (void)dealloc
+{
+  [NSNotificationCenter.defaultCenter removeObserver:self
+                                                name:UITextViewTextDidChangeNotification
+                                              object:nil];
 }
 
 - (UILabel *)placeholderView
@@ -27,7 +36,7 @@
   {
     _placeholderView = [[UILabel alloc] initWithFrame:self.bounds];
     _placeholderView.opaque = NO;
-    _placeholderView.backgroundColor = [UIColor clearColor];
+    _placeholderView.backgroundColor = UIColor.clearColor;
     _placeholderView.textColor = [UIColor lightGrayColor];
     _placeholderView.textAlignment = self.textAlignment;
     _placeholderView.userInteractionEnabled = NO;

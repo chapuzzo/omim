@@ -126,8 +126,8 @@ vector<int64_t> CoverFeature(FeatureType const & f, int cellDepth, uint64_t cell
   int const scale = FeatureType::BEST_GEOMETRY;
 
   FeatureIntersector fIsect;
-  f.ForEachPointRef(fIsect, scale);
-  f.ForEachTriangleRef(fIsect, scale);
+  f.ForEachPoint(fIsect, scale);
+  f.ForEachTriangle(fIsect, scale);
 
   CHECK(!(fIsect.m_trg.empty() && fIsect.m_polyline.empty()) &&
         f.GetLimitRect(scale).IsValid(), (f.DebugString(scale)));
@@ -192,11 +192,10 @@ void AppendLowerLevels(RectId id, int cellDepth, IntervalsT & intervals)
 void CoverViewportAndAppendLowerLevels(m2::RectD const & r, int cellDepth, IntervalsT & res)
 {
   vector<RectId> ids;
-  CoverRect<MercatorBounds, RectId>(r.minX(), r.minY(), r.maxX(), r.maxY(), 8, cellDepth, ids);
+  ids.reserve(SPLIT_RECT_CELLS_COUNT);
+  CoverRect<MercatorBounds, RectId>(r, SPLIT_RECT_CELLS_COUNT, cellDepth, ids);
 
   IntervalsT intervals;
-  intervals.reserve(ids.size() * 4);
-
   for (size_t i = 0; i < ids.size(); ++i)
     AppendLowerLevels(ids[i], cellDepth, intervals);
 
@@ -206,8 +205,9 @@ void CoverViewportAndAppendLowerLevels(m2::RectD const & r, int cellDepth, Inter
 RectId GetRectIdAsIs(m2::RectD const & r)
 {
   double const eps = MercatorBounds::GetCellID2PointAbsEpsilon();
+  using TConverter = CellIdConverter<MercatorBounds, RectId>;
 
-  return CellIdConverter<MercatorBounds, RectId>::Cover2PointsWithCell(
+  return TConverter::Cover2PointsWithCell(
     MercatorBounds::ClampX(r.minX() + eps),
     MercatorBounds::ClampY(r.minY() + eps),
     MercatorBounds::ClampX(r.maxX() - eps),
@@ -241,6 +241,16 @@ IntervalsT const & CoveringGetter::Get(int scale)
       while (id.Level() >= cellDepth)
         id = id.Parent();
       AppendLowerLevels(id, cellDepth, m_res[ind]);
+
+      // Check for optimal result intervals.
+#if 0
+      size_t oldSize = m_res[ind].size();
+      IntervalsT res;
+      SortAndMergeIntervals(m_res[ind], res);
+      if (res.size() != oldSize)
+        LOG(LINFO, ("Old =", oldSize, "; New =", res.size()));
+      res.swap(m_res[ind]);
+#endif
       break;
     }
 

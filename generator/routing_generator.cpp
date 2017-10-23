@@ -3,28 +3,30 @@
 #include "generator/borders_generator.hpp"
 #include "generator/borders_loader.hpp"
 #include "generator/gen_mwm_info.hpp"
+#include "generator/utils.hpp"
 
 #include "routing/osrm2feature_map.hpp"
 #include "routing/osrm_data_facade.hpp"
 #include "routing/osrm_engine.hpp"
 #include "routing/cross_routing_context.hpp"
 
+#include "indexer/classificator.hpp"
 #include "indexer/classificator_loader.hpp"
 #include "indexer/data_header.hpp"
 #include "indexer/feature.hpp"
 #include "indexer/ftypes_matcher.hpp"
 #include "indexer/index.hpp"
-#include "indexer/mercator.hpp"
 
 #include "geometry/distance_on_sphere.hpp"
+#include "geometry/mercator.hpp"
 
 #include "coding/file_container.hpp"
+#include "coding/file_name_utils.hpp"
 #include "coding/read_write_utils.hpp"
+
 #include "coding/internal/file_data.hpp"
 
 #include "base/logging.hpp"
-
-#include "std/fstream.hpp"
 
 #include "3party/osrm/osrm-backend/data_structures/edge_based_node_data.hpp"
 #include "3party/osrm/osrm-backend/data_structures/query_edge.hpp"
@@ -33,26 +35,51 @@
 using platform::CountryFile;
 using platform::LocalCountryFile;
 
+using namespace generator;
+
 namespace routing
 {
-
 using RawRouteResult = InternalRouteResult;
 
 static double const EQUAL_POINT_RADIUS_M = 2.0;
 
-bool LoadIndexes(string const & mwmFile, string const & osrmFile, osrm::NodeDataVectorT & nodeData, gen::OsmID2FeatureID & osm2ft)
+/// Find a feature id for an OSM way id.
+bool GetRoadFeatureID(gen::OsmID2FeatureID const & osm2ft, uint64_t wayId, uint32_t & result)
+{
+  return osm2ft.GetFeatureID(osm::Id::Way(wayId), result);
+}
+
+bool HasWay(gen::OsmID2FeatureID const & osm2ft, uint64_t wayId)
+{
+  uint32_t unused;
+  return osm2ft.GetFeatureID(osm::Id::Way(wayId), unused);
+}
+
+// For debug purposes only. So I do not use constanst or string representations.
+uint8_t GetWarningRank(FeatureType const & ft)
+{
+  feature::TypesHolder types(ft);
+  Classificator const & c = classif();
+  if (types.Has(c.GetTypeByPath({"highway", "trunk"})) ||
+      types.Has(c.GetTypeByPath({"highway", "trunk_link"})))
+    return 1;
+  if (types.Has(c.GetTypeByPath({"highway", "primary"})) ||
+      types.Has(c.GetTypeByPath({"highway", "primary_link"})) ||
+      types.Has(c.GetTypeByPath({"highway", "secondary"})) ||
+      types.Has(c.GetTypeByPath({"highway", "secondary_link"})))
+    return 2;
+  return 3;
+}
+
+bool LoadIndexes(std::string const & mwmFile, std::string const & osrmFile, osrm::NodeDataVectorT & nodeData, gen::OsmID2FeatureID & osm2ft)
 {
   if (!osrm::LoadNodeDataFromFile(osrmFile + ".nodeData", nodeData))
   {
     LOG(LCRITICAL, ("Can't load node data"));
     return false;
   }
-  {
-    FileReader reader(mwmFile + OSM2FEATURE_FILE_EXTENSION);
-    ReaderSource<FileReader> src(reader);
-    osm2ft.Read(src);
-  }
-  return true;
+
+  return osm2ft.ReadFromFile(mwmFile + OSM2FEATURE_FILE_EXTENSION);
 }
 
 bool CheckBBoxCrossingBorder(m2::RegionD const & border, osrm::NodeData const & data)
@@ -79,10 +106,13 @@ bool CheckBBoxCrossingBorder(m2::RegionD const & border, osrm::NodeData const & 
   return any && !all;
 }
 
-void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID const & osm2ft, borders::CountriesContainerT const & m_countries, string const & countryName, routing::CrossRoutingContextWriter & crossContext)
+void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID const & osm2ft,
+                    borders::CountriesContainerT const & countries, std::string const & countryName,
+                    Index const & index, MwmSet::MwmId mwmId,
+                    routing::CrossRoutingContextWriter & crossContext)
 {
   vector<m2::RegionD> regionBorders;
-  m_countries.ForEach([&](borders::CountryPolygons const & c)
+  countries.ForEach([&](borders::CountryPolygons const & c)
   {
     if (c.m_name == countryName)
       c.m_regions.ForEach([&regionBorders](m2::RegionD const & region)
@@ -91,7 +121,7 @@ void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID
       });
   });
 
-  for (WritedNodeID nodeId = 0; nodeId < nodeData.size(); ++nodeId)
+  for (TWrittenNodeId nodeId = 0; nodeId < nodeData.size(); ++nodeId)
   {
     auto const & data = nodeData[nodeId];
 
@@ -101,7 +131,7 @@ void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID
       auto const & startSeg = data.m_segments.front();
       auto const & endSeg = data.m_segments.back();
       // Check if we have geometry for our candidate.
-      if (osm2ft.GetFeatureID(startSeg.wayId) || osm2ft.GetFeatureID(endSeg.wayId))
+      if (HasWay(osm2ft, startSeg.wayId) || HasWay(osm2ft, endSeg.wayId))
       {
         // Check mwm borders crossing.
         for (m2::RegionD const & border: regionBorders)
@@ -110,6 +140,8 @@ void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID
             continue;
 
           m2::PointD intersection = m2::PointD::Zero();
+          ms::LatLon wgsIntersection = ms::LatLon::Zero();
+          size_t intersectionCount = 0;
           for (auto const & segment : data.m_segments)
           {
             bool const outStart =
@@ -127,15 +159,15 @@ void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID
                 ASSERT(false, ("Can't determine a intersection point with a border!"));
                 continue;
             }
-            // for old format compatibility
-            intersection = m2::PointD(MercatorBounds::XToLon(intersection.x), MercatorBounds::YToLat(intersection.y));
+            intersectionCount++;
+            wgsIntersection = MercatorBounds::ToLatLon(intersection);
             if (!outStart && outEnd)
-              crossContext.AddIngoingNode(nodeId, intersection);
+              crossContext.AddIngoingNode(nodeId, wgsIntersection);
             else if (outStart && !outEnd)
             {
-              string mwmName;
+              std::string mwmName;
               m2::PointD const & mercatorPoint = MercatorBounds::FromLatLon(endSeg.lat2, endSeg.lon2);
-              m_countries.ForEachInRect(m2::RectD(mercatorPoint, mercatorPoint), [&](borders::CountryPolygons const & c)
+              countries.ForEachInRect(m2::RectD(mercatorPoint, mercatorPoint), [&](borders::CountryPolygons const & c)
               {
                 if (c.m_name == countryName)
                   return;
@@ -147,9 +179,21 @@ void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID
                 });
               });
               if (!mwmName.empty())
-                crossContext.AddOutgoingNode(nodeId, mwmName, intersection);
+                crossContext.AddOutgoingNode(nodeId, mwmName, wgsIntersection);
               else
                 LOG(LINFO, ("Unknowing outgoing edge", endSeg.lat2, endSeg.lon2, startSeg.lat1, startSeg.lon1));
+            }
+          }
+          if (intersectionCount > 1)
+          {
+            FeatureType ft;
+            Index::FeaturesLoaderGuard loader(index, mwmId);
+            uint32_t index = 0;
+            if (GetRoadFeatureID(osm2ft, startSeg.wayId, index) &&
+                loader.GetFeatureByIndex(index, ft))
+            {
+              LOG(LINFO,
+                  ("Double border intersection", wgsIntersection, "rank:", GetWarningRank(ft)));
             }
           }
         }
@@ -158,7 +202,7 @@ void FindCrossNodes(osrm::NodeDataVectorT const & nodeData, gen::OsmID2FeatureID
   }
 }
 
-void CalculateCrossAdjacency(string const & mwmRoutingPath, routing::CrossRoutingContextWriter & crossContext)
+void CalculateCrossAdjacency(std::string const & mwmRoutingPath, routing::CrossRoutingContextWriter & crossContext)
 {
   OsrmDataFacade<QueryEdge::EdgeData> facade;
   FilesMappingContainer routingCont(mwmRoutingPath);
@@ -173,10 +217,10 @@ void CalculateCrossAdjacency(string const & mwmRoutingPath, routing::CrossRoutin
   // Fill sources and targets with start node task for ingoing (true) and target node task
   // (false) for outgoing nodes
   for (auto i = in.first; i != in.second; ++i)
-    sources.emplace_back(i->m_nodeId, true /* isStartNode */, mwmRoutingPath);
+    sources.emplace_back(i->m_nodeId, true /* isStartNode */, Index::MwmId());
 
   for (auto i = out.first; i != out.second; ++i)
-    targets.emplace_back(i->m_nodeId, false /* isStartNode */, mwmRoutingPath);
+    targets.emplace_back(i->m_nodeId, false /* isStartNode */, Index::MwmId());
 
   LOG(LINFO, ("Cross section has", sources.size(), "incomes and ", targets.size(), "outcomes."));
   vector<EdgeWeight> costs;
@@ -192,7 +236,7 @@ void CalculateCrossAdjacency(string const & mwmRoutingPath, routing::CrossRoutin
   LOG(LINFO, ("Calculation of weight map between outgoing nodes DONE"));
 }
 
-void WriteCrossSection(routing::CrossRoutingContextWriter const & crossContext, string const & mwmRoutingPath)
+void WriteCrossSection(routing::CrossRoutingContextWriter const & crossContext, std::string const & mwmRoutingPath)
 {
   LOG(LINFO, ("Collect all data into one file..."));
 
@@ -204,62 +248,52 @@ void WriteCrossSection(routing::CrossRoutingContextWriter const & crossContext, 
   LOG(LINFO, ("Have written routing info, bytes written:", w.Pos() - start_size, "bytes"));
 }
 
-void BuildCrossRoutingIndex(string const & baseDir, string const & countryName, string const & osrmFile)
+void BuildCrossRoutingIndex(std::string const & baseDir, std::string const & countryName,
+                            std::string const & osrmFile)
 {
   LOG(LINFO, ("Cross mwm routing section builder"));
+  classificator::Load();
 
-  CountryFile countryFile(countryName);
-  LocalCountryFile localFile(baseDir, countryFile, 0 /* version */);
-  localFile.SyncWithDisk();
+  SingleMwmIndex index(my::JoinFoldersToPath(baseDir, countryName + DATA_FILE_EXTENSION));
 
   LOG(LINFO, ("Loading indexes..."));
   osrm::NodeDataVectorT nodeData;
   gen::OsmID2FeatureID osm2ft;
-  if (!LoadIndexes(localFile.GetPath(MapOptions::Map), osrmFile, nodeData, osm2ft))
+  if (!LoadIndexes(index.GetPath(MapOptions::Map), osrmFile, nodeData, osm2ft))
     return;
 
   LOG(LINFO, ("Loading countries borders..."));
-  borders::CountriesContainerT m_countries;
-  CHECK(borders::LoadCountriesList(baseDir, m_countries),
+  borders::CountriesContainerT countries;
+  CHECK(borders::LoadCountriesList(baseDir, countries),
         ("Error loading country polygons files"));
 
   LOG(LINFO, ("Finding cross nodes..."));
   routing::CrossRoutingContextWriter crossContext;
-  FindCrossNodes(nodeData, osm2ft, m_countries, countryName, crossContext);
+  FindCrossNodes(nodeData, osm2ft, countries, countryName, index.GetIndex(),
+                 index.GetMwmId(), crossContext);
 
-  string const mwmRoutingPath = localFile.GetPath(MapOptions::CarRouting);
-  CalculateCrossAdjacency(mwmRoutingPath, crossContext);
-  WriteCrossSection(crossContext, mwmRoutingPath);
+  std::string const mwmPath = index.GetPath(MapOptions::Map);
+  CalculateCrossAdjacency(mwmPath, crossContext);
+  WriteCrossSection(crossContext, mwmPath);
 }
 
-void BuildRoutingIndex(string const & baseDir, string const & countryName, string const & osrmFile)
+void BuildRoutingIndex(std::string const & baseDir, std::string const & countryName, std::string const & osrmFile)
 {
   classificator::Load();
 
-  CountryFile countryFile(countryName);
-
   // Correct mwm version doesn't matter here - we just need access to mwm files via Index.
-  LocalCountryFile localFile(baseDir, countryFile, 0 /* version */);
-  localFile.SyncWithDisk();
-  Index index;
-  auto p = index.Register(localFile);
-  if (p.second != MwmSet::RegResult::Success)
-  {
-    LOG(LCRITICAL, ("MWM file not found"));
-    return;
-  }
-  ASSERT(p.first.IsAlive(), ());
+  SingleMwmIndex index(my::JoinFoldersToPath(baseDir, countryName + DATA_FILE_EXTENSION));
 
   osrm::NodeDataVectorT nodeData;
   gen::OsmID2FeatureID osm2ft;
-  if (!LoadIndexes(localFile.GetPath(MapOptions::Map), osrmFile, nodeData, osm2ft))
+  if (!LoadIndexes(index.GetPath(MapOptions::Map), osrmFile, nodeData, osm2ft))
     return;
 
   OsrmFtSegMappingBuilder mapping;
 
   uint32_t found = 0, all = 0, multiple = 0, equal = 0, moreThan1Seg = 0, stored = 0;
 
-  for (WritedNodeID nodeId = 0; nodeId < nodeData.size(); ++nodeId)
+  for (TWrittenNodeId nodeId = 0; nodeId < nodeData.size(); ++nodeId)
   {
     auto const & data = nodeData[nodeId];
 
@@ -273,16 +307,20 @@ void BuildRoutingIndex(string const & baseDir, string const & countryName, strin
       ++all;
 
       // now need to determine feature id and segments in it
-      uint32_t const fID = osm2ft.GetFeatureID(seg.wayId);
-      if (fID == 0)
+      uint32_t fID = 0;
+      if (!GetRoadFeatureID(osm2ft, seg.wayId, fID))
       {
         LOG(LWARNING, ("No feature id for way:", seg.wayId));
         continue;
       }
 
       FeatureType ft;
-      Index::FeaturesLoaderGuard loader(index, p.first);
-      loader.GetFeatureByIndex(fID, ft);
+      Index::FeaturesLoaderGuard loader(index.GetIndex(), index.GetMwmId());
+      if (!loader.GetFeatureByIndex(fID, ft))
+      {
+        LOG(LWARNING, ("Can't read feature with id:", fID, "for way:", seg.wayId));
+        continue;
+      }
 
       ft.ParseGeometry(FeatureType::BEST_GEOMETRY);
 
@@ -290,7 +328,7 @@ void BuildRoutingIndex(string const & baseDir, string const & countryName, strin
       vector<IndexT> indices[2];
 
       // Match input segment points on feature points.
-      for (int j = 0; j < ft.GetPointsCount(); ++j)
+      for (size_t j = 0; j < ft.GetPointsCount(); ++j)
       {
         double const lon = MercatorBounds::XToLon(ft.GetPoint(j).x);
         double const lat = MercatorBounds::YToLat(ft.GetPoint(j).y);
@@ -369,14 +407,14 @@ void BuildRoutingIndex(string const & baseDir, string const & countryName, strin
       }
 
       // Matching error. Print warning message.
-      LOG(LWARNING, ("!!!!! Match not found:", seg.wayId));
-      LOG(LWARNING, ("(Lat, Lon):", pts[0].y, pts[0].x, "; (Lat, Lon):", pts[1].y, pts[1].x));
+      LOG(LINFO, ("!!!!! Match not found:", seg.wayId));
+      LOG(LINFO, ("(Lat, Lon):", pts[0].y, pts[0].x, "; (Lat, Lon):", pts[1].y, pts[1].x));
 
       int ind1 = -1;
       int ind2 = -1;
       double dist1 = numeric_limits<double>::max();
       double dist2 = numeric_limits<double>::max();
-      for (int j = 0; j < ft.GetPointsCount(); ++j)
+      for (size_t j = 0; j < ft.GetPointsCount(); ++j)
       {
         double lon = MercatorBounds::XToLon(ft.GetPoint(j).x);
         double lat = MercatorBounds::YToLat(ft.GetPoint(j).y);
@@ -384,17 +422,17 @@ void BuildRoutingIndex(string const & baseDir, string const & countryName, strin
         double const d2 = ms::DistanceOnEarth(pts[1].y, pts[1].x, lat, lon);
         if (d1 < dist1)
         {
-          ind1 = j;
+          ind1 = static_cast<int>(j);
           dist1 = d1;
         }
         if (d2 < dist2)
         {
-          ind2 = j;
+          ind2 = static_cast<int>(j);
           dist2 = d2;
         }
       }
 
-      LOG(LWARNING, ("ind1 =", ind1, "ind2 =", ind2, "dist1 =", dist1, "dist2 =", dist2));
+      LOG(LINFO, ("ind1 =", ind1, "ind2 =", ind2, "dist1 =", dist1, "dist2 =", dist2));
     }
 
     if (vec.size() > 1)
@@ -406,25 +444,20 @@ void BuildRoutingIndex(string const & baseDir, string const & countryName, strin
               "Multiple:", multiple, "Equal:", equal));
 
   LOG(LINFO, ("Collect all data into one file..."));
-  string const fPath = localFile.GetPath(MapOptions::CarRouting);
 
-  FilesContainerW routingCont(fPath /*, FileWriter::OP_APPEND*/);
+  std::string const mwmPath = index.GetPath(MapOptions::Map);
+  std::string const mwmWithoutRoutingPath = mwmPath + NOROUTING_FILE_EXTENSION;
 
-  {
-    // Write version for routing file that is equal to correspondent mwm file.
-    FilesContainerR mwmCont(localFile.GetPath(MapOptions::Map));
+  // Backup mwm file without routing.
+  CHECK(my::CopyFileX(mwmPath, mwmWithoutRoutingPath), ("Can't copy", mwmPath, "to", mwmWithoutRoutingPath));
 
-    FileWriter w = routingCont.GetWriter(VERSION_FILE_TAG);
-    ReaderSource<ModelReaderPtr> src(mwmCont.GetReader(VERSION_FILE_TAG));
-    rw::ReadAndWrite(src, w);
-    w.WritePaddingByEnd(4);
-  }
+  FilesContainerW routingCont(mwmPath, FileWriter::OP_WRITE_EXISTING);
 
   mapping.Save(routingCont);
 
-  auto appendFile = [&] (string const & tag)
+  auto appendFile = [&] (std::string const & tag)
   {
-    string const fileName = osrmFile + "." + tag;
+    std::string const fileName = osrmFile + "." + tag;
     LOG(LINFO, ("Append file", fileName, "with tag", tag));
     routingCont.Write(fileName, tag);
   };
@@ -437,7 +470,7 @@ void BuildRoutingIndex(string const & baseDir, string const & countryName, strin
   routingCont.Finish();
 
   uint64_t sz;
-  VERIFY(my::GetFileSize(fPath, sz), ());
+  VERIFY(my::GetFileSize(mwmPath, sz), ());
   LOG(LINFO, ("Nodes stored:", stored, "Routing index file size:", sz));
 }
 }

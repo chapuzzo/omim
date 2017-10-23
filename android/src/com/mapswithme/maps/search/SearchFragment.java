@@ -1,10 +1,14 @@
 package com.mapswithme.maps.search;
 
-import android.app.Activity;
-import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.location.Location;
+import android.os.Build;
 import android.os.Bundle;
+import android.support.annotation.CallSuper;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
+import android.support.design.widget.AppBarLayout;
+import android.support.design.widget.CollapsingToolbarLayout;
 import android.support.design.widget.TabLayout;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
@@ -16,36 +20,73 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
-import com.mapswithme.country.ActiveCountryTree;
-import com.mapswithme.country.CountrySuggestFragment;
-import com.mapswithme.maps.Framework;
+import com.google.android.gms.ads.search.SearchAdView;
 import com.mapswithme.maps.MwmActivity;
+import com.mapswithme.maps.MwmApplication;
 import com.mapswithme.maps.R;
 import com.mapswithme.maps.base.BaseMwmFragment;
 import com.mapswithme.maps.base.OnBackPressListener;
+import com.mapswithme.maps.bookmarks.data.FeatureId;
+import com.mapswithme.maps.bookmarks.data.MapObject;
+import com.mapswithme.maps.downloader.CountrySuggestFragment;
+import com.mapswithme.maps.downloader.MapManager;
 import com.mapswithme.maps.location.LocationHelper;
-import com.mapswithme.maps.sound.TtsPlayer;
+import com.mapswithme.maps.location.LocationListener;
+import com.mapswithme.maps.routing.RoutingController;
+import com.mapswithme.maps.widget.PlaceholderView;
 import com.mapswithme.maps.widget.SearchToolbarController;
-import com.mapswithme.util.InputUtils;
-import com.mapswithme.util.Language;
+import com.mapswithme.maps.widget.placepage.Sponsored;
+import com.mapswithme.util.ConnectionState;
+import com.mapswithme.util.SharedPropertiesUtils;
 import com.mapswithme.util.UiUtils;
 import com.mapswithme.util.Utils;
-import com.mapswithme.util.statistics.AlohaHelper;
+import com.mapswithme.util.concurrency.UiThread;
+import com.mapswithme.util.log.LoggerFactory;
 import com.mapswithme.util.statistics.Statistics;
 
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
-
 public class SearchFragment extends BaseMwmFragment
-                         implements LocationHelper.LocationListener,
-                                    OnBackPressListener,
+                         implements OnBackPressListener,
                                     NativeSearchListener,
                                     SearchToolbarController.Container,
-                                    CategoriesAdapter.OnCategorySelectedListener
+                                    CategoriesAdapter.OnCategorySelectedListener,
+                                    HotelsFilterHolder
 {
-  private static final int RC_VOICE_RECOGNITION = 0xCA11;
+  public static final String PREFS_SHOW_ENABLE_LOGGING_SETTING = "ShowEnableLoggingSetting";
+  private static final int MIN_QUERY_LENGTH_FOR_AD = 3;
+  private static final long ADS_DELAY_MS = 200;
+  private static final long RESULTS_DELAY_MS = 400;
+  private static final int AD_POSITION = 3;
+
   private long mLastQueryTimestamp;
+
+  @Nullable
+  private GoogleAdsLoader mAdsLoader;
+  private boolean mAdsRequested = false;
+  private int mAdsOrientation = -1;
+  @Nullable
+  private SearchAdView mGoogleAdView;
+  @NonNull
+  private final Runnable mResultsShowingTask = new Runnable()
+  {
+    @Override
+    public void run()
+    {
+      refreshSearchResults();
+    }
+  };
+  @NonNull
+  private final Runnable mSearchEndTask = new Runnable()
+  {
+    @Override
+    public void run()
+    {
+      onSearchEnd();
+    }
+  };
 
   private static class LastPosition
   {
@@ -69,10 +110,21 @@ public class SearchFragment extends BaseMwmFragment
     }
 
     @Override
+    protected boolean useExtendedToolbar()
+    {
+      return false;
+    }
+
+    @Override
     protected void onTextChanged(String query)
     {
       if (!isAdded())
         return;
+
+      UiThread.cancelDelayedTasks(mSearchEndTask);
+      UiThread.cancelDelayedTasks(mResultsShowingTask);
+      mGoogleAdView = null;
+      stopAdsLoading();
 
       if (TextUtils.isEmpty(query))
       {
@@ -81,9 +133,22 @@ public class SearchFragment extends BaseMwmFragment
         return;
       }
 
-      // TODO: This code only for demonstration purposes and will be removed soon
-      if (trySwitchOnTurnSound(query) || tryChangeMapStyle(query))
+      if (tryRecognizeLoggingCommand(query))
+      {
+        mSearchAdapter.clear();
+        stopSearch();
+        closeSearch();
         return;
+      }
+
+      if (mCianCategorySelected)
+        return;
+
+      if (mAdsLoader != null && !isInteractiveSearch() && query.length() >= MIN_QUERY_LENGTH_FOR_AD)
+      {
+        mAdsRequested = true;
+        mAdsLoader.scheduleAdsLoading(getActivity().getApplicationContext(), query);
+      }
 
       runSearch();
     }
@@ -91,43 +156,59 @@ public class SearchFragment extends BaseMwmFragment
     @Override
     protected boolean onStartSearchClick()
     {
-      showAllResultsOnMap();
+      if (!RoutingController.get().isWaitingPoiPick())
+        showAllResultsOnMap();
       return true;
     }
 
     @Override
-    protected void onVoiceInputClick()
+    protected int getVoiceInputPrompt()
     {
-      try
-      {
-        startActivityForResult(InputUtils.createIntentForVoiceRecognition(getString(R.string.search_map)), RC_VOICE_RECOGNITION);
-      } catch (ActivityNotFoundException e)
-      {
-        AlohaHelper.logException(e);
-      }
+      return R.string.search_map;
     }
 
     @Override
-    protected void onUpClick()
+    protected void startVoiceRecognition(Intent intent, int code)
     {
-      if (TextUtils.isEmpty(getQuery()))
-      {
-        super.onUpClick();
-        return;
-      }
+      startActivityForResult(intent, code);
+    }
 
-      clear();
+    @Override
+    protected boolean supportsVoiceSearch()
+    {
+      return true;
+    }
+
+    @Override
+    public void onUpClick()
+    {
+      if (!onBackPressed())
+        super.onUpClick();
+    }
+
+    @Override
+    public void clear()
+    {
+      super.clear();
+      if (mFilterController != null)
+      {
+        mFilterController.setFilter(null);
+        mFilterController.updateFilterButtonVisibility(false);
+      }
     }
   }
 
+  private View mTabFrame;
   private View mResultsFrame;
+  private PlaceholderView mResultsPlaceholder;
   private RecyclerView mResults;
-  private View mResultsPlaceholder;
-
-  private View mTabsFrame;
+  private AppBarLayout mAppBarLayout;
+  private CollapsingToolbarLayout mToolbarLayout;
+  private View mFilterElevation;
+  @Nullable
+  private SearchFilterController mFilterController;
 
   private SearchToolbarController mToolbarController;
-  private ViewPager mPager;
 
   private SearchAdapter mSearchAdapter;
 
@@ -144,10 +225,58 @@ public class SearchFragment extends BaseMwmFragment
 
   private final LastPosition mLastPosition = new LastPosition();
   private boolean mSearchRunning;
+  private boolean mCianCategorySelected;
+  private String mInitialQuery;
+  @Nullable
+  private String mInitialLocale;
+  private boolean mInitialSearchOnMap = false;
+  @Nullable
+  private HotelsFilter mInitialHotelsFilter;
 
-  private boolean doShowDownloadSuggest()
+  private boolean mIsHotel;
+  @NonNull
+  private SearchResult[] mSearchResults = new SearchResult[0];
+
+  private final LocationListener mLocationListener = new LocationListener.Simple()
   {
-    return ActiveCountryTree.getTotalDownloadedCount() == 0;
+    @Override
+    public void onLocationUpdated(Location location)
+    {
+      mLastPosition.set(location.getLatitude(), location.getLongitude());
+
+      if (!TextUtils.isEmpty(getQuery()))
+        mSearchAdapter.notifyDataSetChanged();
+    }
+  };
+
+  private final AppBarLayout.OnOffsetChangedListener mOffsetListener =
+      new AppBarLayout.OnOffsetChangedListener() {
+        @Override
+        public void onOffsetChanged(AppBarLayout appBarLayout, int verticalOffset)
+        {
+          if (mFilterController == null)
+            return;
+
+          boolean show = !(Math.abs(verticalOffset) == appBarLayout.getTotalScrollRange());
+          mFilterController.showDivider(show);
+          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP)
+            UiUtils.showIf(!show, mFilterElevation);
+        }
+      };
+
+  private static boolean doShowDownloadSuggest()
+  {
+    return (MapManager.nativeGetDownloadedCount() == 0 && !MapManager.nativeIsDownloading());
+  }
+
+  @Override
+  @Nullable
+  public HotelsFilter getHotelsFilter()
+  {
+    if (mFilterController == null)
+      return null;
+
+    return mFilterController.getFilter();
   }
 
   private void showDownloadSuggest()
@@ -172,15 +301,22 @@ public class SearchFragment extends BaseMwmFragment
     if (fragment != null && !fragment.isDetached() && !fragment.isRemoving())
       manager.beginTransaction()
              .remove(fragment)
-             .commit();
+             .commitAllowingStateLoss();
   }
 
-  protected void updateFrames()
+  private void updateFrames()
   {
-    final boolean active = searchActive();
-    UiUtils.showIf(active, mResultsFrame);
+    final boolean hasQuery = mToolbarController.hasQuery();
+    UiUtils.showIf(hasQuery, mResultsFrame);
+    AppBarLayout.LayoutParams lp = (AppBarLayout.LayoutParams) mToolbarLayout.getLayoutParams();
+    lp.setScrollFlags(hasQuery ? AppBarLayout.LayoutParams.SCROLL_FLAG_ENTER_ALWAYS
+                        | AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL : 0);
+    mToolbarLayout.setLayoutParams(lp);
+    if (mFilterController != null)
+      mFilterController.show(hasQuery && mSearchAdapter.getItemCount() != 0,
+                             mSearchAdapter.showPopulateButton());
 
-    if (active)
+    if (hasQuery)
       hideDownloadSuggest();
     else if (doShowDownloadSuggest())
       showDownloadSuggest();
@@ -190,11 +326,13 @@ public class SearchFragment extends BaseMwmFragment
 
   private void updateResultsPlaceholder()
   {
-    final boolean show = (!mSearchRunning &&
-                          mSearchAdapter.getItemCount() == 0 &&
-                          searchActive());
+    final boolean show = !mSearchRunning
+                         && mSearchAdapter.getItemCount() == 0
+                         && mToolbarController.hasQuery();
 
     UiUtils.showIf(show, mResultsPlaceholder);
+    if (mFilterController != null)
+      mFilterController.showPopulateButton(mSearchAdapter.showPopulateButton());
   }
 
   @Override
@@ -203,21 +341,74 @@ public class SearchFragment extends BaseMwmFragment
     return inflater.inflate(R.layout.fragment_search, container, false);
   }
 
+  @CallSuper
   @Override
-  public void onViewCreated(View view, Bundle savedInstanceState)
+  public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState)
   {
     super.onViewCreated(view, savedInstanceState);
+    readArguments();
+
+    if (ConnectionState.isWifiConnected() && SharedPropertiesUtils.isShowcaseSwitchedOnLocal())
+    {
+      mAdsLoader = new GoogleAdsLoader(getContext(), ADS_DELAY_MS);
+      mAdsLoader.attach(new GoogleAdsLoader.AdvertLoadingListener()
+      {
+        @Override
+        public void onLoadingFinished(@NonNull SearchAdView searchAdView)
+        {
+          mGoogleAdView = searchAdView;
+          mAdsRequested = false;
+        }
+      });
+    }
 
     ViewGroup root = (ViewGroup) view;
-    mTabsFrame = root.findViewById(R.id.tab_frame);
-    mPager = (ViewPager) mTabsFrame.findViewById(R.id.pages);
+    mAppBarLayout = (AppBarLayout) root.findViewById(R.id.app_bar);
+    mToolbarLayout = (CollapsingToolbarLayout) mAppBarLayout.findViewById(R.id.collapsing_toolbar);
+    mTabFrame = root.findViewById(R.id.tab_frame);
+    ViewPager pager = (ViewPager) mTabFrame.findViewById(R.id.pages);
+
     mToolbarController = new ToolbarController(view);
-    final TabAdapter tabAdapter = new TabAdapter(getChildFragmentManager(), mPager, (TabLayout) root.findViewById(R.id.tabs));
+
+    TabLayout tabLayout = (TabLayout) root.findViewById(R.id.tabs);
+    final TabAdapter tabAdapter = new TabAdapter(getChildFragmentManager(), pager, tabLayout);
 
     mResultsFrame = root.findViewById(R.id.results_frame);
     mResults = (RecyclerView) mResultsFrame.findViewById(R.id.recycler);
     setRecyclerScrollListener(mResults);
-    mResultsPlaceholder = mResultsFrame.findViewById(R.id.placeholder);
+    mResultsPlaceholder = (PlaceholderView) mResultsFrame.findViewById(R.id.placeholder);
+    mResultsPlaceholder.setContent(R.drawable.img_search_nothing_found_light,
+                                   R.string.search_not_found, R.string.search_not_found_query);
+
+    mFilterElevation = view.findViewById(R.id.filter_elevation);
+
+    mFilterController = new SearchFilterController(root.findViewById(R.id.filter_frame),
+                                                   (HotelsFilterView) view.findViewById(R.id.filter),
+                                                   new SearchFilterController.DefaultFilterListener()
+    {
+      @Override
+      public void onViewClick()
+      {
+        showAllResultsOnMap();
+      }
+
+      @Override
+      public void onFilterClear()
+      {
+        runSearch();
+      }
+
+      @Override
+      public void onFilterDone()
+      {
+        runSearch();
+      }
+    });
+    if (savedInstanceState != null)
+      mFilterController.onRestoreState(savedInstanceState);
+    if (mInitialHotelsFilter != null)
+      mFilterController.setFilter(mInitialHotelsFilter);
+    mFilterController.updateFilterButtonVisibility(false);
 
     if (mSearchAdapter == null)
     {
@@ -238,34 +429,51 @@ public class SearchFragment extends BaseMwmFragment
     updateFrames();
     updateResultsPlaceholder();
 
-    readArguments();
+    if (mInitialQuery != null)
+    {
+      setQuery(mInitialQuery);
+    }
+    mToolbarController.activate();
+
     SearchEngine.INSTANCE.addListener(this);
 
     if (SearchRecents.getSize() == 0)
-      mPager.setCurrentItem(TabAdapter.Tab.CATEGORIES.ordinal());
+      pager.setCurrentItem(TabAdapter.Tab.CATEGORIES.ordinal());
 
     tabAdapter.setTabSelectedListener(new TabAdapter.OnTabSelectedListener()
     {
       @Override
-      public void onTabSelected(TabAdapter.Tab tab)
+      public void onTabSelected(@NonNull TabAdapter.Tab tab)
       {
+        Statistics.INSTANCE.trackSearchTabSelected(tab.name());
         mToolbarController.deactivate();
       }
     });
+
+    if (mInitialSearchOnMap)
+      showAllResultsOnMap();
   }
 
   @Override
+  public void onSaveInstanceState(Bundle outState)
+  {
+    if (mFilterController != null)
+      mFilterController.onSaveState(outState);
+  }
+
   public void onResume()
   {
     super.onResume();
-    LocationHelper.INSTANCE.addLocationListener(this);
+    LocationHelper.INSTANCE.addListener(mLocationListener, true);
+    mAppBarLayout.addOnOffsetChangedListener(mOffsetListener);
   }
 
   @Override
   public void onPause()
   {
-    LocationHelper.INSTANCE.removeLocationListener(this);
+    LocationHelper.INSTANCE.removeListener(mLocationListener);
     super.onPause();
+    mAppBarLayout.removeOnOffsetChangedListener(mOffsetListener);
   }
 
   @Override
@@ -279,6 +487,14 @@ public class SearchFragment extends BaseMwmFragment
     super.onDestroy();
   }
 
+  @Override
+  public void onDestroyView()
+  {
+    if (mAdsLoader != null)
+      mAdsLoader.detach();
+    super.onDestroyView();
+  }
+
   private String getQuery()
   {
     return mToolbarController.getQuery();
@@ -289,22 +505,16 @@ public class SearchFragment extends BaseMwmFragment
     mToolbarController.setQuery(text);
   }
 
-  private boolean searchActive()
-  {
-    return !getQuery().isEmpty();
-  }
-
   private void readArguments()
   {
     final Bundle arguments = getArguments();
     if (arguments == null)
       return;
 
-    final String query = arguments.getString(SearchActivity.EXTRA_QUERY);
-    if (query != null)
-      setQuery(query);
-
-    mToolbarController.activate();
+    mInitialQuery = arguments.getString(SearchActivity.EXTRA_QUERY);
+    mInitialLocale = arguments.getString(SearchActivity.EXTRA_LOCALE);
+    mInitialSearchOnMap = arguments.getBoolean(SearchActivity.EXTRA_SEARCH_ON_MAP);
+    mInitialHotelsFilter = arguments.getParcelable(SearchActivity.EXTRA_HOTELS_FILTER);
   }
 
   private void hideSearch()
@@ -314,79 +524,82 @@ public class SearchFragment extends BaseMwmFragment
     Utils.navigateToParent(getActivity());
   }
 
-  // FIXME: This code only for demonstration purposes and will be removed soon
-  private boolean tryChangeMapStyle(String str)
+  private boolean tryRecognizeLoggingCommand(@NonNull String str)
   {
-    // Hook for shell command on change map style
-    final boolean isDark = str.equals("mapstyle:dark") || str.equals("?dark");
-    final boolean isLight = isDark ? false : str.equals("mapstyle:light") || str.equals("?light");
-    final boolean isOld = isDark || isLight ? false : str.equals("?oldstyle");
+    if (str.equals("?enableLogging"))
+    {
+      MwmApplication.prefs().edit().putBoolean(PREFS_SHOW_ENABLE_LOGGING_SETTING, true).apply();
+      return true;
+    }
 
-    if (!isDark && !isLight && !isOld)
-      return false;
+    if (str.equals("?disableLogging"))
+    {
+      LoggerFactory.INSTANCE.setFileLoggingEnabled(false);
+      MwmApplication.prefs().edit().putBoolean(PREFS_SHOW_ENABLE_LOGGING_SETTING, false).apply();
+      return true;
+    }
 
-    hideSearch();
-
-    // change map style for the Map activity
-    final int mapStyle = isOld ? Framework.MAP_STYLE_LIGHT : (isDark ? Framework.MAP_STYLE_DARK : Framework.MAP_STYLE_CLEAR);
-    Framework.setMapStyle(mapStyle);
-
-    return true;
+    return false;
   }
 
-  private boolean trySwitchOnTurnSound(String query)
+  private void processSelected(@NonNull SearchResult result)
   {
-    final boolean sound = "?sound".equals(query);
-    final boolean nosound = "?nosound".equals(query);
+    if (RoutingController.get().isWaitingPoiPick())
+    {
+      SearchResult.Description description = result.description;
+      final MapObject point = MapObject.createMapObject(FeatureId.EMPTY, MapObject.SEARCH, result.name,
+                                            description != null ? description.featureType : "",
+                                            result.lat, result.lon);
+      RoutingController.get().onPoiSelected(point);
+    }
 
-    if (!sound && !nosound)
-      return false;
+    mToolbarController.deactivate();
 
-    hideSearch();
-    TtsPlayer.INSTANCE.enable(sound);
-
-    return sound;
+    if (getActivity() instanceof SearchActivity)
+      Utils.navigateToParent(getActivity());
   }
-  // FIXME END
 
-  protected void showSingleResultOnMap(int resultIndex)
+  void showSingleResultOnMap(@NonNull SearchResult result, int resultIndex)
   {
     final String query = getQuery();
     SearchRecents.add(query);
     SearchEngine.cancelApiCall();
-    SearchEngine.showResult(query, resultIndex);
-    Utils.navigateToParent(getActivity());
 
-    Statistics.INSTANCE.trackSimpleNamedEvent(Statistics.EventName.SEARCH_KEY_CLICKED);
+    if (!RoutingController.get().isWaitingPoiPick())
+      SearchEngine.showResult(resultIndex);
+
+    processSelected(result);
+
+    Statistics.INSTANCE.trackEvent(Statistics.EventName.SEARCH_ITEM_CLICKED);
   }
 
-  protected void showAllResultsOnMap()
+  void showAllResultsOnMap()
   {
     final String query = getQuery();
+    SearchRecents.add(query);
     mLastQueryTimestamp = System.nanoTime();
-    SearchEngine.runInteractiveSearch(query, Language.getKeyboardLocale(), mLastQueryTimestamp, true);
+
+    HotelsFilter hotelsFilter = null;
+    if (mFilterController != null)
+      hotelsFilter = mFilterController.getFilter();
+
+    SearchEngine.searchInteractive(
+        query, !TextUtils.isEmpty(mInitialLocale)
+               ? mInitialLocale : com.mapswithme.util.Language.getKeyboardLocale(),
+        mLastQueryTimestamp, false /* isMapAndTable */, hotelsFilter);
     SearchEngine.showAllResults(query);
     Utils.navigateToParent(getActivity());
 
-    Statistics.INSTANCE.trackSimpleNamedEvent(Statistics.EventName.SEARCH_ON_MAP_CLICKED);
+    Statistics.INSTANCE.trackEvent(Statistics.EventName.SEARCH_ON_MAP_CLICKED);
   }
-
-  @Override
-  public void onLocationUpdated(final Location l)
-  {
-    mLastPosition.set(l.getLatitude(), l.getLongitude());
-
-    if (!TextUtils.isEmpty(getQuery()))
-      mSearchAdapter.notifyDataSetChanged();
-  }
-
-  @Override
-  public void onCompassUpdated(long time, double magneticNorth, double trueNorth, double accuracy) {}
-
-  @Override
-  public void onLocationError(int errorCode) {}
 
   private void onSearchEnd()
+  {
+    if (mSearchRunning && isAdded())
+      updateSearchView();
+  }
+
+  private void updateSearchView()
   {
     mSearchRunning = false;
     mToolbarController.showProgress(false);
@@ -397,22 +610,35 @@ public class SearchFragment extends BaseMwmFragment
   private void stopSearch()
   {
     SearchEngine.cancelApiCall();
-    SearchEngine.cancelSearch();
-    onSearchEnd();
+    SearchEngine.cancelAllSearches();
+    updateSearchView();
+  }
+
+  private boolean isInteractiveSearch()
+  {
+    // TODO @yunitsky Implement more elegant solution.
+    return getActivity() instanceof MwmActivity;
   }
 
   private void runSearch()
   {
+    HotelsFilter hotelsFilter = null;
+    if (mFilterController != null)
+      hotelsFilter = mFilterController.getFilter();
+
     mLastQueryTimestamp = System.nanoTime();
-    // TODO @yunitsky Implement more elegant solution.
-    if (getActivity() instanceof MwmActivity)
-      SearchEngine.runInteractiveSearch(getQuery(), Language.getKeyboardLocale(), mLastQueryTimestamp, false);
+    if (isInteractiveSearch())
+    {
+      SearchEngine.searchInteractive(
+          getQuery(), mLastQueryTimestamp, true /* isMapAndTable */, hotelsFilter);
+    }
     else
     {
-      final boolean searchStarted = SearchEngine.runSearch(getQuery(), Language.getKeyboardLocale(), mLastQueryTimestamp, true,
-                                                           mLastPosition.valid, mLastPosition.lat, mLastPosition.lon);
-      if (!searchStarted)
+      if (!SearchEngine.search(getQuery(), mLastQueryTimestamp, mLastPosition.valid,
+              mLastPosition.lat, mLastPosition.lon, hotelsFilter))
+      {
         return;
+      }
     }
 
     mSearchRunning = true;
@@ -422,52 +648,137 @@ public class SearchFragment extends BaseMwmFragment
   }
 
   @Override
-  public void onResultsUpdate(SearchResult[] results, long timestamp)
+  public void onResultsUpdate(SearchResult[] results, long timestamp, boolean isHotel)
   {
-    if (!isAdded() || !searchActive())
+    if (!isAdded() || !mToolbarController.hasQuery())
       return;
 
-    // Search is running hence results updated.
-    mSearchRunning = true;
-    updateFrames();
-    mSearchAdapter.refreshData(results);
-    mToolbarController.showProgress(true);
+    mSearchResults = results;
+    mIsHotel = isHotel;
+
+    if (mAdsRequested)
+    {
+      UiThread.cancelDelayedTasks(mResultsShowingTask);
+      UiThread.runLater(mResultsShowingTask, RESULTS_DELAY_MS);
+    }
+    else
+    {
+      refreshSearchResults();
+    }
   }
 
   @Override
   public void onResultsEnd(long timestamp)
   {
-    if (mSearchRunning && isAdded())
+    if (mAdsRequested)
+    {
+      UiThread.cancelDelayedTasks(mSearchEndTask);
+      UiThread.runLater(mSearchEndTask, RESULTS_DELAY_MS);
+    }
+    else
+    {
       onSearchEnd();
+    }
   }
 
   @Override
   public void onCategorySelected(String category)
   {
-    mToolbarController.setQuery(category);
+    if (!TextUtils.isEmpty(category) && category.equals("cian "))
+    {
+      mCianCategorySelected = true;
+      mToolbarController.setQuery(category);
+
+      Statistics.INSTANCE.trackSponsoredEvent(Statistics.EventName.SEARCH_SPONSOR_CATEGORY_SELECTED,
+                                              Sponsored.TYPE_CIAN);
+      showAllResultsOnMap();
+      mCianCategorySelected = false;
+    }
+    else
+    {
+      mToolbarController.setQuery(category);
+    }
+  }
+
+  private void refreshSearchResults()
+  {
+    // Search is running hence results updated.
+    stopAdsLoading();
+    mSearchRunning = true;
+    updateFrames();
+    mSearchAdapter.refreshData(combineResultsWithAds());
+    mToolbarController.showProgress(true);
+    updateFilterButton(mIsHotel);
+  }
+
+  @NonNull
+  private SearchData[] combineResultsWithAds()
+  {
+    if (mSearchResults.length < AD_POSITION || mGoogleAdView == null)
+      return mSearchResults;
+
+    List<SearchData> result = new LinkedList<>();
+    int counter = 0;
+    for (SearchResult r : mSearchResults)
+    {
+      if (r.type != SearchResultTypes.TYPE_SUGGEST && counter++ == AD_POSITION)
+        result.add(new GoogleAdsBanner(mGoogleAdView));
+      else
+        result.add(r);
+    }
+
+    SearchData[] resultArray = new SearchData[result.size()];
+    result.toArray(resultArray);
+    return resultArray;
+  }
+
+  private void updateFilterButton(boolean isHotel)
+  {
+    if (mFilterController != null)
+    {
+      mFilterController.updateFilterButtonVisibility(isHotel);
+      if (!isHotel)
+        mFilterController.setFilter(null);
+    }
   }
 
   @Override
   public void onActivityResult(int requestCode, int resultCode, Intent data)
   {
     super.onActivityResult(requestCode, resultCode, data);
-
-    if (requestCode == RC_VOICE_RECOGNITION && resultCode == Activity.RESULT_OK)
-    {
-      String result = InputUtils.getBestRecognitionResult(data);
-      if (!TextUtils.isEmpty(result))
-        setQuery(result);
-    }
+    mToolbarController.onActivityResult(requestCode, resultCode, data);
   }
 
   @Override
   public boolean onBackPressed()
   {
-    if (!searchActive())
-      return false;
+    if (mFilterController != null && mFilterController.onBackPressed())
+      return true;
+    if (mToolbarController.hasQuery())
+    {
+      mToolbarController.clear();
+      return true;
+    }
 
-    mToolbarController.clear();
-    return true;
+    boolean isSearchActivity = getActivity() instanceof SearchActivity;
+    mToolbarController.deactivate();
+    if (RoutingController.get().isWaitingPoiPick())
+    {
+      RoutingController.get().onPoiSelected(null);
+      if (isSearchActivity)
+        closeSearch();
+      return !isSearchActivity;
+    }
+
+    if (isSearchActivity)
+      closeSearch();
+    return isSearchActivity;
+  }
+
+  private void closeSearch()
+  {
+    getActivity().finish();
+    getActivity().overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
   }
 
   public void setRecyclerScrollListener(RecyclerView recycler)
@@ -480,5 +791,14 @@ public class SearchFragment extends BaseMwmFragment
   public SearchToolbarController getController()
   {
     return mToolbarController;
+  }
+
+  private void stopAdsLoading()
+  {
+    if (mAdsLoader == null)
+      return;
+
+    mAdsLoader.cancelAdsLoading();
+    mAdsRequested = false;
   }
 }

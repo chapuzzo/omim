@@ -8,6 +8,8 @@
 
 #include "base/buffer_vector.hpp"
 
+#include "std/utility.hpp"
+
 
 class FilesContainerR;
 class FileWriter;
@@ -60,13 +62,13 @@ namespace feature
     }
 
     inline size_t GetScalesCount() const { return m_scales.size(); }
-    inline int GetScale(int i) const { return static_cast<int>(m_scales[i]); }
+    inline int GetScale(size_t i) const { return static_cast<int>(m_scales[i]); }
     inline int GetLastScale() const { return m_scales.back(); }
 
     pair<int, int> GetScaleRange() const;
 
     inline version::Format GetFormat() const { return m_format; }
-    inline bool IsMWMSuitable() const { return m_format <= version::lastFormat; }
+    inline bool IsMWMSuitable() const { return m_format <= version::Format::lastFormat; }
 
     /// @name Serialization
     //@{

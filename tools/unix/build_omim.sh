@@ -1,4 +1,6 @@
 #!/bin/bash
+set -u -e
+
 OPT_DEBUG=
 OPT_RELEASE=
 OPT_OSRM=
@@ -37,28 +39,27 @@ if [ -z "$OPT_DEBUG$OPT_RELEASE$OPT_OSRM" ]; then
   OPT_RELEASE=1
 fi
 
-set -x -u -e
-
 OMIM_PATH="$(cd "${OMIM_PATH:-$(dirname "$0")/../..}"; pwd)"
+if ! grep "DEFAULT_URLS_JSON" "$OMIM_PATH/private.h" >/dev/null 2>/dev/null; then
+  echo "Please run $OMIM_PATH/configure.sh"
+  exit 2
+fi
+
 BOOST_PATH="${BOOST_PATH:-/usr/local/boost_1.54.0}"
-DEVTOOLSET_PATH=/opt/rh/devtoolset-2
+DEVTOOLSET_PATH=/opt/rh/devtoolset-3
 if [ -d "$DEVTOOLSET_PATH" ]; then
-  . "$DEVTOOLSET_PATH/enable"
+  export MANPATH=
+  source "$DEVTOOLSET_PATH/enable"
 else
   DEVTOOLSET_PATH=
 fi
 
 # Find qmake, prefer qmake-qt5
-if [ ! -x "${QMAKE-}" ]; then
-  QMAKE=qmake-qt5
-  if ! hash "$QMAKE" 2>/dev/null; then
-    QMAKE=qmake
-  fi
-fi
+source "$OMIM_PATH/tools/autobuild/detect_qmake.sh"
 
-# Find cmake, prefer cmake28
+# Find cmake, prefer cmake3
 if [ ! -x "${CMAKE-}" ]; then
-  CMAKE=cmake28
+  CMAKE=cmake3
   if ! hash "$CMAKE" 2>/dev/null; then
     CMAKE=cmake
   fi
@@ -69,7 +70,7 @@ if [ "$(uname -s)" == "Darwin" ]; then
   SPEC=${SPEC:-macx-clang}
   PROCESSES=$(sysctl -n hw.ncpu)
 else
-  SPEC=${SPEC:-linux-clang-libc++}
+  SPEC=${SPEC-}
   PROCESSES=$(nproc)
 fi
 
@@ -88,14 +89,13 @@ build_conf()
   (
     export BOOST_INCLUDEDIR="$BOOST_PATH/include"
     cd "$DIRNAME"
-    if [ -n "$DEVTOOLSET_PATH" ]; then
-      "$QMAKE" "$OMIM_PATH/omim.pro" -spec $SPEC CONFIG+=$CONF ${CONFIG+"CONFIG*=$CONFIG"} \
-        "QMAKE_CXXFLAGS *=--gcc-toolchain=$DEVTOOLSET_PATH/root/usr" \
-        "QMAKE_LFLAGS *=--gcc-toolchain=$DEVTOOLSET_PATH/root/usr"
-    else
-      "$QMAKE" "$OMIM_PATH/omim.pro" -spec $SPEC CONFIG+=$CONF ${CONFIG+"CONFIG*=$CONFIG"}
+    "$QMAKE" "$OMIM_PATH/omim.pro" ${SPEC:+-spec $SPEC} CONFIG+=$CONF ${CONFIG+"CONFIG*=$CONFIG"}
+    TMP_FILE="build_error.log"
+    if ! make -j $PROCESSES 2> "$TMP_FILE"; then
+      echo '--------------------'
+      cat "$TMP_FILE"
+      exit 1
     fi
-    make -j $PROCESSES
   )
 }
 
@@ -106,19 +106,23 @@ build_conf_osrm()
   DIRNAME="$2"
   mkdir -p "$DIRNAME"
   OSPEC="$SPEC"
+  # OSRM is built with linux-clang spec
   [ "$OSPEC" == "linux-clang-libc++" ] && OSPEC=linux-clang
 
   (
     export BOOST_INCLUDEDIR="$BOOST_PATH/include"
     cd "$DIRNAME"
-    if [ -n "$DEVTOOLSET_PATH" ]; then
-      "$QMAKE" "$OMIM_PATH/omim.pro" -spec $OSPEC "CONFIG+=$CONF osrm" \
-        "QMAKE_CXXFLAGS *=--gcc-toolchain=$DEVTOOLSET_PATH/root/usr" \
-        "QMAKE_LFLAGS *=--gcc-toolchain=$DEVTOOLSET_PATH/root/usr"
+
+    if [[ -n "${USE_CMAKE-}" ]]; then
+      DIRNAME="$DIRNAME/out/$CONF"
+      mkdir -p "$DIRNAME"
+      cd "$DIRNAME"
+      "$CMAKE" "$OMIM_PATH"
+      make routing routing_common indexer geometry coding base jansson -j $PROCESSES
     else
-      "$QMAKE" "$OMIM_PATH/omim.pro" -spec $OSPEC "CONFIG+=$CONF osrm"
+      "$QMAKE" "$OMIM_PATH/omim.pro" ${SPEC:+-spec $SPEC} "CONFIG+=$CONF osrm no-tests" ${CONFIG+"CONFIG*=$CONFIG"}
+      make -j $PROCESSES
     fi
-    make -j $PROCESSES
   )
 }
 
@@ -134,22 +138,23 @@ build_osrm()
   mkdir -p "$OSRM_TARGET"
   # First, build omim libraries
   build_conf_osrm $OSRM_OMIM_CONF "$OSRM_TARGET/omim-build"
-  OSRM_OMIM_LIBS="omim-build/out/$OSRM_OMIM_CONF"
+  OSRM_OMIM_LIBS="$(cd "$OSRM_TARGET/omim-build/out/$OSRM_OMIM_CONF"; pwd)"
   (
     cd "$OSRM_TARGET"
     "$CMAKE" "-DBOOST_ROOT=$BOOST_PATH" -DCMAKE_BUILD_TYPE=$OSRM_CONF "-DOMIM_BUILD_PATH=$OSRM_OMIM_LIBS" "$BACKEND"
     make clean
     make
   )
-  rm -r "$OSRM_TARGET/$OSRM_OMIM_LIBS"
 }
 
 build()
 {
   build_conf $1
   [ -n "$OPT_OSRM" ] && build_osrm $1
+  return 0
 }
 
 [ -n "$OPT_DEBUG" ]   && build debug
 [ -n "$OPT_RELEASE" ] && build release
 [ -n "$OPT_OSRM" -a -z "$OPT_DEBUG$OPT_RELEASE" ] && build_osrm release
+exit 0

@@ -1,5 +1,3 @@
-#include "base/SRC_FIRST.hpp"
-
 #include "map/feature_vec_model.hpp"
 
 #include "platform/platform.hpp"
@@ -81,6 +79,13 @@ void FeaturesFetcher::Clear() { m_multiIndex.Clear(); }
 void FeaturesFetcher::ClearCaches()
 {
   m_multiIndex.ClearCache();
+}
+
+void FeaturesFetcher::OnMapUpdated(platform::LocalCountryFile const & newFile,
+                                   platform::LocalCountryFile const & oldFile)
+{
+  if (m_onMapDeregistered)
+    m_onMapDeregistered(oldFile);
 }
 
 void FeaturesFetcher::OnMapDeregistered(platform::LocalCountryFile const & localFile)

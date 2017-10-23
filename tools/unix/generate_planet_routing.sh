@@ -3,6 +3,8 @@
 # Builds routing indices for given regions #
 ############################################
 
+set -e # Exit when any of commands fail
+set -o pipefail # Capture all errors in command chains
 set -u # Fail on undefined variables
 #set -x # Echo every script line
 
@@ -12,6 +14,9 @@ if [ $# -lt 1 ]; then
   echo "  $0 pbf"
   echo "  $0 prepare"
   echo "  $0 mwm"
+  echo "  $0 online"
+  echo "  $0 serve"
+  echo "  $0 stop"
   echo ''
   exit 1
 fi
@@ -22,43 +27,41 @@ fail() {
 }
 
 OMIM_PATH="${OMIM_PATH:-$(cd "$(dirname "$0")/../.."; pwd)}"
-BORDERS_PATH="${BORDERS_PATH:-$OMIM_PATH/data/borders}"
-TARGET="${TARGET:-$OMIM_PATH/data}"
+DATA_PATH="${DATA_PATH:-$OMIM_PATH/data}"
+BORDERS_PATH="${BORDERS_PATH:-$DATA_PATH/borders}"
+TARGET="${TARGET:-$DATA_PATH}"
 [ ! -d "$TARGET" ] && fail "$TARGET should be a writable folder"
 INTDIR="${INTDIR:-$TARGET/intermediate_data}"
 mkdir -p "$INTDIR"
 NUM_PROCESSES=${NUM_PROCESSES:-8}
 KEEP_INTDIR=${KEEP_INTDIR-}
-OSRM_FLAG="${OSRM_FLAG:-$INTDIR/osrm_done}"
 LOG_PATH=${LOG_PATH:-.}
 echo "[$(date +%Y/%m/%d\ %H:%M:%S)] $0 $1"
 
 if [ "$1" == "pbf" ]; then
-  rm -f "$OSRM_FLAG"
   PLANET="${PLANET:-$HOME/planet/planet-latest.o5m}"
   OSMCTOOLS="${OSMCTOOLS:-$HOME/osmctools}"
   [ ! -d "$OSMCTOOLS" ] && OSMCTOOLS="$INTDIR"
-  [ ! -x "$OSMCTOOLS/osmconvert" ] && cc -x c -lz -O3 "$OMIM_PATH/tools/osmctools/osmconvert.c" -o "$OSMCTOOLS/osmconvert"
+  [ ! -x "$OSMCTOOLS/osmconvert" ] && cc -x c -O3 "$OMIM_PATH/tools/osmctools/osmconvert.c" -o "$OSMCTOOLS/osmconvert" -lz
 
   TMPBORDERS="$INTDIR/tmpborders"
+  [ -d "$TMPBORDERS" ] && rm -r "$TMPBORDERS"
   mkdir "$TMPBORDERS"
   if [ -z "${REGIONS-}" ]; then
     cp "$BORDERS_PATH"/*.poly "$TMPBORDERS"
   else
-    echo "$REGIONS" | xargs -I % cp "$BORDERS_PATH/%.poly" "$TMPBORDERS"
+    echo "$REGIONS" | xargs -I % cp "%" "$TMPBORDERS"
   fi
-  [ -z "$(ls "$TMPBORDERS"/*.poly)" ] && fail "No regions to create routing files for"
+  [ -z "$(ls "$TMPBORDERS" | grep '\.poly$')" ] && fail "No regions to create routing files for"
   export OSMCTOOLS
   export PLANET
   export INTDIR
   find "$TMPBORDERS" -maxdepth 1 -name '*.poly' -print0 | xargs -0 -P $NUM_PROCESSES -I % \
-    sh -c '"$OSMCTOOLS/osmconvert" "$PLANET" --hash-memory=2000 -B="%" --complex-ways --out-pbf -o="$INTDIR/$(basename "%" .poly).pbf"'
-  [ $? != 0 ] && fail "Failed to process all the regions"
+    sh -c '"$OSMCTOOLS/osmconvert" "$PLANET" --hash-memory=2000 -B="%" --complete-ways --out-pbf -o="$INTDIR/$(basename "%" .poly).pbf"'
   rm -r "$TMPBORDERS"
 
 elif [ "$1" == "prepare" ]; then
-  rm -f "$OSRM_FLAG"
-  [ -z "$(ls "$INTDIR"/*.pbf)" ] && fail "Please build PBF files first"
+  [ -z "$(ls "$INTDIR" | grep '\.pbf$')" ] && fail "Please build PBF files first"
   OSRM_PATH="${OSRM_PATH:-$OMIM_PATH/3party/osrm/osrm-backend}"
   OSRM_BUILD_PATH="${OSRM_BUILD_PATH:-$OMIM_PATH/../osrm-backend-release}"
   [ ! -x "$OSRM_BUILD_PATH/osrm-extract" ] && fail "Please compile OSRM binaries to $OSRM_BUILD_PATH"
@@ -81,9 +84,9 @@ elif [ "$1" == "prepare" ]; then
     RESTRICTIONS_FILE="$OSRM_FILE.restrictions"
     LOG="$LOG_PATH/$(basename "$PBF" .pbf).log"
     rm -f "$OSRM_FILE"
-    "$OSRM_BUILD_PATH/osrm-extract" --config "$EXTRACT_CFG" --profile "$PROFILE" "$PBF" >> "$LOG" 2>&1
-    "$OSRM_BUILD_PATH/osrm-prepare" --config "$PREPARE_CFG" --profile "$PROFILE" "$OSRM_FILE" -r "$RESTRICTIONS_FILE" >> "$LOG" 2>&1
-    "$OSRM_BUILD_PATH/osrm-mapsme" -i "$OSRM_FILE" >> "$LOG" 2>&1
+    "$OSRM_BUILD_PATH/osrm-extract" --config "$EXTRACT_CFG" --profile "$PROFILE" "$PBF" >> "$LOG" 2>&1 || true
+    "$OSRM_BUILD_PATH/osrm-prepare" --config "$PREPARE_CFG" --profile "$PROFILE" "$OSRM_FILE" -r "$RESTRICTIONS_FILE" >> "$LOG" 2>&1 || true
+    "$OSRM_BUILD_PATH/osrm-mapsme" -i "$OSRM_FILE" >> "$LOG" 2>&1 || true
     if [ -s "$OSRM_FILE" ]; then
       [ -z "$KEEP_INTDIR" ] && rm -f "$PBF"
       ONE_OSRM_READY=1
@@ -92,27 +95,33 @@ elif [ "$1" == "prepare" ]; then
     fi
   done
   [ -z "${ONE_OSRM_READY-}" ] && fail "No osrm files were prepared"
-  touch "$OSRM_FLAG"
 
 elif [ "$1" == "mwm" ]; then
-  [ ! -f "$OSRM_FLAG" ] && fail "Please build OSRM files first"
+  [ -z "$(ls "$INTDIR" | grep '\.osrm$')" ] && fail "Please build OSRM files first"
   source "$(dirname "$0")/find_generator_tool.sh"
 
-  if [ ! -d "$TARGET/borders" -o -z "$(ls "$TARGET/borders" | grep \.poly)" ]; then
+  if [ ! -d "$TARGET/borders" -o -z "$(ls "$TARGET/borders" | grep '\.poly$')" ]; then
     # copy polygons to a temporary directory
     POLY_DIR="$TARGET/borders"
     mkdir -p "$POLY_DIR"
-    cp "$BORDERS_PATH"/*.poly "$POLY_DIR/"
+    if [ -z "${REGIONS-}" ]; then
+      cp "$BORDERS_PATH"/*.poly "$POLY_DIR"
+    else
+      echo "$REGIONS" | xargs -I % cp "%" "$POLY_DIR"
+    fi
   fi
 
   # Xargs has 255 chars limit for exec string, so we use short variable names.
   export G="$GENERATOR_TOOL"
-  export K="--make_routing --make_cross_section"
+  export K="--make_routing --make_cross_section --make_routing_index --generate_traffic_keys"
+  export I="--intermediate_data_path=$INTDIR"
   export TARGET
   export LOG_PATH
-  export DATA_PATH="$OMIM_PATH/data/"
+  export DATA_PATH
+  set +e
   find "$INTDIR" -maxdepth 1 -name '*.osrm' -print0 | xargs -0 -P $NUM_PROCESSES -I % \
-    sh -c 'O="%"; B="$(basename "$O" .osrm)"; "$G" $K --osrm_file_name="$O" --data_path="$TARGET" --user_resource_path="$DATA_PATH" --output="$B" 2>> "$LOG_PATH/$B.log"'
+    sh -c 'O="%"; B="$(basename "$O" .osrm)"; "$G" $K "$I" --osrm_file_name="$O" --data_path="$TARGET" --user_resource_path="$DATA_PATH" --output="$B" 2>> "$LOG_PATH/$B.log"'
+  set -e
 
   if [ -n "${POLY_DIR-}" ]; then
     # delete temporary polygons
@@ -121,6 +130,11 @@ elif [ "$1" == "mwm" ]; then
       rmdir "$POLY_DIR"
     fi
   fi
+
+elif [ "$1" == "stop" ]; then
+  LOG="$LOG_PATH/planet.log"
+  echo "Stopping osrm server..." >> "$LOG"
+  pkill osrm-routed || true
 
 elif [ "$1" == "online" ]; then
   PLANET="${PLANET:-$HOME/planet/planet-latest.o5m}"
@@ -159,6 +173,33 @@ elif [ "$1" == "online" ]; then
       echo "Failed to create $OSRM_FILE" >> "$LOG"
   fi
 
+elif [ "$1" == "serve" ]; then
+  OSRM_PATH="${OSRM_PATH:-$OMIM_PATH/3party/osrm/osrm-backend}"
+  OSRM_BUILD_PATH="${OSRM_BUILD_PATH:-$OMIM_PATH/../osrm-backend-release}"
+  [ ! -x "$OSRM_BUILD_PATH/osrm-extract" ] && fail "Please compile OSRM binaries to $OSRM_BUILD_PATH"
+
+  OSRM_THREADS=${OSRM_THREADS:-15}
+  OSRM_MEMORY=${OSRM_MEMORY:-50}
+
+  export STXXLCFG="$HOME/.stxxl"
+  OSRM_FILE="$INTDIR/planet.osrm"
+  PORT="10012"
+  RESTRICTIONS_FILE="$OSRM_FILE.restrictions"
+  LOG="$LOG_PATH/planet.log"
+  if [ -s "$OSRM_FILE" ]; then
+    echo "Starting: $OSRM_FILE"
+    "$OSRM_BUILD_PATH/osrm-routed" "$OSRM_FILE" --borders "$OMIM_PATH/data/" --port "$PORT" >> "$LOG" 2>&1 &
+
+    echo "Waiting until OSRM server starts:"
+    until $(curl --output /dev/null --silent --head --fail http://localhost:$PORT/mapsme); do
+      printf '.' >> "$LOG"
+      sleep 5
+    done
+   else
+    echo "Can't find OSRM file: $OSRM_FILE"
+ fi
+
 else
   fail "Incorrect parameter: $1"
 fi
+exit 0

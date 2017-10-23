@@ -3,7 +3,6 @@ package com.mapswithme.maps.bookmarks;
 import android.app.Activity;
 import android.os.Bundle;
 import android.support.annotation.Nullable;
-import android.support.v4.app.DialogFragment;
 import android.support.v4.app.Fragment;
 import android.support.v7.widget.RecyclerView;
 import android.view.LayoutInflater;
@@ -12,34 +11,29 @@ import android.view.ViewGroup;
 
 import com.mapswithme.maps.R;
 import com.mapswithme.maps.base.BaseMwmDialogFragment;
-import com.mapswithme.maps.bookmarks.data.Bookmark;
 import com.mapswithme.maps.bookmarks.data.BookmarkManager;
 import com.mapswithme.maps.dialog.EditTextDialogFragment;
 import com.mapswithme.util.statistics.Statistics;
 
-import static com.mapswithme.maps.dialog.EditTextDialogFragment.OnTextSaveListener;
-
-public class ChooseBookmarkCategoryFragment extends BaseMwmDialogFragment implements OnTextSaveListener, ChooseBookmarkCategoryAdapter.CategoryListener
+public class ChooseBookmarkCategoryFragment extends BaseMwmDialogFragment
+                                         implements EditTextDialogFragment.OnTextSaveListener,
+                                                    ChooseBookmarkCategoryAdapter.CategoryListener
 {
   public static final String CATEGORY_ID = "ExtraCategoryId";
-  public static final String BOOKMARK_ID = "ExtraBookmarkId";
 
-  private Bookmark mBookmark;
   private ChooseBookmarkCategoryAdapter mAdapter;
   private RecyclerView mRecycler;
 
-
   public interface Listener
   {
-    void onCategoryChanged(int bookmarkId, int newCategoryId);
+    void onCategoryChanged(int newCategoryId);
   }
   private Listener mListener;
 
   @Override
-  public void onCreate(@Nullable Bundle savedInstanceState)
+  protected int getStyle()
   {
-    super.onCreate(savedInstanceState);
-    setStyle(DialogFragment.STYLE_NO_FRAME, R.style.MwmMain_DialogFragment);
+    return STYLE_NO_TITLE;
   }
 
   @Nullable
@@ -59,7 +53,6 @@ public class ChooseBookmarkCategoryFragment extends BaseMwmDialogFragment implem
 
     final Bundle args = getArguments();
     final int catId = args.getInt(CATEGORY_ID, 0);
-    mBookmark = BookmarkManager.INSTANCE.getBookmark(catId, args.getInt(BOOKMARK_ID));
     mAdapter = new ChooseBookmarkCategoryAdapter(getActivity(), catId);
     mAdapter.setListener(this);
     mRecycler.setAdapter(mAdapter);
@@ -88,26 +81,23 @@ public class ChooseBookmarkCategoryFragment extends BaseMwmDialogFragment implem
 
   private void createCategory(String name)
   {
-    final int category = BookmarkManager.INSTANCE.createCategory(name);
-    mBookmark.setCategoryId(category);
+    final int category = BookmarkManager.INSTANCE.nativeCreateCategory(name);
     mAdapter.chooseItem(category);
 
     if (mListener != null)
-      mListener.onCategoryChanged(mBookmark.getBookmarkId(), category);
+      mListener.onCategoryChanged(category);
     dismiss();
-
-    Statistics.INSTANCE.trackGroupCreated();
+    Statistics.INSTANCE.trackEvent(Statistics.EventName.BMK_GROUP_CREATED);
   }
 
   @Override
   public void onCategorySet(int categoryId)
   {
-    mBookmark.setCategoryId(categoryId);
     mAdapter.chooseItem(categoryId);
     if (mListener != null)
-      mListener.onCategoryChanged(mBookmark.getBookmarkId(), categoryId);
+      mListener.onCategoryChanged(categoryId);
     dismiss();
-    Statistics.INSTANCE.trackSimpleNamedEvent(Statistics.EventName.GROUP_CHANGED);
+    Statistics.INSTANCE.trackEvent(Statistics.EventName.BMK_GROUP_CHANGED);
   }
 
   @Override

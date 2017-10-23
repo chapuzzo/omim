@@ -46,28 +46,62 @@ directory, and from within it, run:
 
 Install Qt 5.5:
 
-    sudo add-apt-repository ppa:beineri/opt-qt55-trusty
+    sudo add-apt-repository ppa:beineri/opt-qt551-trusty
     sudo apt-get update
     sudo apt-get install qt55base
+
+Set up the Qt 5.5 environment:
+
     source /opt/qt55/bin/qt55-env.sh
-
-To run OSRM binaries, you'll need:
-
-    sudo apt-get install libtbb2 libluabind0.9.1 liblua50 libstxxl1
 
 Do a git clone:
 
-    git clone git@github.com:mapsme/omim.git
+    git clone --depth=1 --recursive https://github.com/mapsme/omim.git
     cd omim
     echo | ./configure.sh
 
+On Ubuntu 14.04, you'll need a PPA with an up-to-date version of libc++.
+You shouldn't need this on newer versions.
+
+    sudo add-apt-repository ppa:jhe/llvm-toolchain
+
 Then:
 
-    sudo apt-get install clang-3.5 libboost-iostreams-dev libglu1-mesa-dev
+    sudo apt-get install clang-3.6 libc++-dev libboost-iostreams-dev libglu1-mesa-dev
+    sudo ln -s /usr/lib/llvm-3.6/bin/clang /usr/bin/clang
+    sudo ln -s /usr/lib/llvm-3.6/bin/clang++ /usr/bin/clang++
+    tools/unix/build_omim.sh
+
+Prepend with `CONFIG=gtool` if only generator_tool is needed. You would need 1.5 GB of memory
+to compile `stats` module.
+
+The generated binaries appear in `omim-build-<flavour>/out/<flavour>/`.
+Run tests from this directory with `../../../omim/tools/unix/run_tests.sh`.
+
+To build and run OSRM binaries:
+
+    sudo apt-get install libtbb2 libluabind0.9.1 liblua50 libstxxl1
     sudo apt-get install libtbb-dev libluabind-dev libstxxl-dev libosmpbf-dev libprotobuf-dev
-    sudo ln -s /usr/lib/llvm-3.5/bin/clang /usr/bin/clang
-    sudo ln -s /usr/lib/llvm-3.5/bin/clang++ /usr/bin/clang++
-    omim/tools/unix/build_omim.sh
+    sudo apt-get install libboost-thread-dev libboost-system-dev libboost-program-options-dev
+    sudo apt-get install libboost-filesystem-dev libboost-date-time-dev
+    tools/unix/build_omim.sh -o
+
+### Fedora 23
+
+Install dependencies:
+
+    dnf install clang qt5-qtbase-devel boost-devel libstdc++-devel
+
+Then do a git clone, run `configure.sh` and compile with linux-clang spec:
+
+    SPEC=linux-clang tools/unix/build_omim.sh -r
+
+### Debian Jessie
+
+Example [Dockerfile](debian/Dockerfile). In instruction have been compiled Generator Tool and, for routing indices, OSRM backend. I used this command:
+	
+    CONFIG=gtool omim/tools/unix/build_omim.sh -cro
+
 
 ### Windows
 
@@ -121,7 +155,7 @@ to check it out before following these steps.
 
 ### Building data
 
-* Run `CONFIG="gtool map-designer" omim/tools/unix/build_omim.sh`.
+* Run `CONFIG="gtool map_designer" omim/tools/unix/build_omim.sh`.
 * Generate data as usual (either with `generate_mwm.sh` or `generate_planet.sh`).
 * For MAPS.ME employees, publish planet data to http://designer.mapswithme.com/mac/DATA_VERSION
 (via a ticket to admins, from `mapsme4:/opt/mapsme/designers`).
@@ -171,13 +205,12 @@ to SDK and NDK. Or specify these in command line:
 
 ## iOS
 
-For XCode configuration instructions, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-* Open `omim/iphone/Maps/Maps.xcodeproj` in XCode.
-* Open "Product → Scheme → Edit Scheme", then "Info" and change build configuration to Simulator.
+* Install [Homebrew](http://brew.sh/) and run `brew install carthage`.
+* Open `xcode/omim.xcworkspace` in XCode.
+* Select "xcMAPS.ME" product scheme for developing, or "MAPS.ME" to make a distribution package.
 * Run the project (Product → Run).
 
-If a script has trouble finding your Qt 5 installation, edit `omim/autobuild/detect_qmake.sh`,
+If a script has trouble finding your Qt 5 installation, edit `omim/tools/autobuild/detect_qmake.sh`,
 adding a path to `qmake` there.
 
 ## Map Servers

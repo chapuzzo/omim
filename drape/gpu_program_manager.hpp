@@ -2,29 +2,37 @@
 
 #include "drape/pointers.hpp"
 #include "drape/gpu_program.hpp"
+#include "drape/gpu_program_info.hpp"
 #include "drape/shader.hpp"
 
-#include "std/map.hpp"
-#include "std/noncopyable.hpp"
+#include "base/macros.hpp"
+
+#include <map>
+#include <string>
 
 namespace dp
 {
-
-class GpuProgramManager : public noncopyable
+class GpuProgramManager
 {
 public:
+  GpuProgramManager() = default;
   ~GpuProgramManager();
 
-  RefPointer<GpuProgram> GetProgram(int index);
+  void Init(drape_ptr<gpu::GpuProgramGetter> && programGetter);
+
+  ref_ptr<GpuProgram> GetProgram(int index);
 
 private:
-  RefPointer<Shader> GetShader(int index, string const & source, Shader::Type t);
+  ref_ptr<Shader> GetShader(int index, string const & source, Shader::Type t);
 
-private:
-  typedef map<int, MasterPointer<GpuProgram> > program_map_t;
-  typedef map<int, MasterPointer<Shader> > shader_map_t;
-  program_map_t m_programs;
-  shader_map_t m_shaders;
+  using ProgramMap = std::map<int, drape_ptr<GpuProgram>>;
+  using ShaderMap = std::map<int, drape_ptr<Shader>>;
+  ProgramMap m_programs;
+  ShaderMap m_shaders;
+  std::string m_globalDefines;
+  uint8_t m_minTextureSlotsCount = 0;
+  drape_ptr<gpu::GpuProgramGetter> m_programGetter;
+
+  DISALLOW_COPY_AND_MOVE(GpuProgramManager);
 };
-
-} // namespace dp
+}  // namespace dp

@@ -1,123 +1,262 @@
 package com.mapswithme.maps;
 
+import android.app.Application;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Environment;
-import android.preference.PreferenceManager;
+import android.os.Handler;
+import android.os.Message;
+import android.support.annotation.NonNull;
+import android.support.annotation.UiThread;
+import android.support.multidex.MultiDex;
+import android.text.TextUtils;
 import android.util.Log;
 
-import com.google.gson.Gson;
-import com.mapswithme.country.ActiveCountryTree;
-import com.mapswithme.country.CountryItem;
+import com.appsflyer.AppsFlyerLib;
+import com.crashlytics.android.Crashlytics;
+import com.crashlytics.android.ndk.CrashlyticsNdk;
+import com.mapswithme.maps.background.AppBackgroundTracker;
 import com.mapswithme.maps.background.Notifier;
 import com.mapswithme.maps.bookmarks.data.BookmarkManager;
+import com.mapswithme.maps.downloader.CountryItem;
+import com.mapswithme.maps.downloader.MapManager;
+import com.mapswithme.maps.editor.Editor;
+import com.mapswithme.maps.location.LocationHelper;
+import com.mapswithme.maps.location.TrackRecorder;
+import com.mapswithme.maps.routing.RoutingController;
+import com.mapswithme.maps.settings.StoragePathManager;
+import com.mapswithme.maps.sound.TtsPlayer;
+import com.mapswithme.maps.traffic.TrafficManager;
+import com.mapswithme.maps.ugc.UGC;
 import com.mapswithme.util.Config;
 import com.mapswithme.util.Constants;
+import com.mapswithme.util.Counters;
+import com.mapswithme.util.CrashlyticsUtils;
+import com.mapswithme.util.PermissionsUtils;
+import com.mapswithme.util.SharedPropertiesUtils;
+import com.mapswithme.util.ThemeSwitcher;
 import com.mapswithme.util.UiUtils;
-import com.mapswithme.util.Yota;
-import com.mapswithme.util.statistics.AlohaHelper;
+import com.mapswithme.util.Utils;
+import com.mapswithme.util.log.Logger;
+import com.mapswithme.util.log.LoggerFactory;
+import com.mapswithme.util.statistics.PushwooshHelper;
 import com.mapswithme.util.statistics.Statistics;
-import com.parse.Parse;
-import com.parse.ParseException;
-import com.parse.ParseInstallation;
-import com.parse.SaveCallback;
+import com.my.tracker.MyTracker;
+import com.my.tracker.MyTrackerParams;
+import com.pushwoosh.PushManager;
+import io.fabric.sdk.android.Fabric;
 
 import java.io.File;
+import java.util.List;
 
-public class MwmApplication extends android.app.Application implements ActiveCountryTree.ActiveCountryListener
+public class MwmApplication extends Application
 {
+  private Logger mLogger;
   private final static String TAG = "MwmApplication";
 
-  // Parse
-  private static final String PREF_PARSE_DEVICE_TOKEN = "ParseDeviceToken";
-  private static final String PREF_PARSE_INSTALLATION_ID = "ParseInstallationId";
+  private static final String PW_EMPTY_APP_ID = "XXXXX";
 
-  private static MwmApplication mSelf;
-  private final Gson mGson = new Gson();
-  private static SharedPreferences mPrefs;
+  private static MwmApplication sSelf;
+  private SharedPreferences mPrefs;
+  private AppBackgroundTracker mBackgroundTracker;
 
-  private boolean mAreCountersInitialised;
-  private boolean mIsFrameworkInitialized;
+  private boolean mFrameworkInitialized;
+  private boolean mPlatformInitialized;
+  private boolean mCrashlyticsInitialized;
+
+  private Handler mMainLoopHandler;
+  private final Object mMainQueueToken = new Object();
+
+  private final MapManager.StorageCallback mStorageCallbacks = new MapManager.StorageCallback()
+  {
+    @Override
+    public void onStatusChanged(List<MapManager.StorageCallbackData> data)
+    {
+      for (MapManager.StorageCallbackData item : data)
+        if (item.isLeafNode && item.newStatus == CountryItem.STATUS_FAILED)
+        {
+          if (MapManager.nativeIsAutoretryFailed())
+          {
+            Notifier.cancelDownloadSuggest();
+
+            Notifier.notifyDownloadFailed(item.countryId, MapManager.nativeGetName(item.countryId));
+            MapManager.sendErrorStat(Statistics.EventName.DOWNLOADER_ERROR, MapManager.nativeGetError(item.countryId));
+          }
+
+          return;
+        }
+    }
+
+    @Override
+    public void onProgress(String countryId, long localSize, long remoteSize) {}
+  };
+
+  @NonNull
+  private final AppBackgroundTracker.OnTransitionListener mBackgroundListener =
+      new AppBackgroundTracker.OnTransitionListener()
+      {
+        @Override
+        public void onTransit(boolean foreground)
+        {
+          if (!foreground && LoggerFactory.INSTANCE.isFileLoggingEnabled())
+          {
+            Log.i(TAG, "The app goes to background. All logs are going to be zipped.");
+            LoggerFactory.INSTANCE.zipLogs(null);
+          }
+        }
+      };
+
+  @NonNull
+  private final AppBackgroundTracker.OnVisibleAppLaunchListener mVisibleAppLaunchListener =
+      new AppBackgroundTracker.OnVisibleAppLaunchListener()
+      {
+        @Override
+        public void onVisibleAppLaunch()
+        {
+          Statistics.INSTANCE.trackColdStartupInfo();
+        }
+      };
 
   public MwmApplication()
   {
     super();
-    mSelf = this;
+    sSelf = this;
   }
 
   public static MwmApplication get()
   {
-    return mSelf;
+    return sSelf;
   }
 
-  public static Gson gson()
+  public static AppBackgroundTracker backgroundTracker()
   {
-    return mSelf.mGson;
+    return sSelf.mBackgroundTracker;
   }
 
-  public static SharedPreferences prefs()
+  public synchronized static SharedPreferences prefs()
   {
-    return mPrefs;
+    if (sSelf.mPrefs == null)
+      sSelf.mPrefs = sSelf.getSharedPreferences(sSelf.getString(R.string.pref_file_name), MODE_PRIVATE);
+
+    return sSelf.mPrefs;
+  }
+
+  public static boolean isCrashlyticsEnabled()
+  {
+    return !BuildConfig.FABRIC_API_KEY.startsWith("0000");
   }
 
   @Override
-  public void onCountryProgressChanged(int group, int position, long[] sizes) {}
-
-  @Override
-  public void onCountryStatusChanged(int group, int position, int oldStatus, int newStatus)
+  protected void attachBaseContext(Context base)
   {
-    Notifier.cancelDownloadSuggest();
-    if (newStatus == MapStorage.DOWNLOAD_FAILED)
-    {
-      CountryItem item = ActiveCountryTree.getCountryItem(group, position);
-      Notifier.notifyDownloadFailed(ActiveCountryTree.getCoreIndex(group, position), item.getName());
-    }
+    super.attachBaseContext(base);
+    MultiDex.install(this);
   }
 
-  @Override
-  public void onCountryGroupChanged(int oldGroup, int oldPosition, int newGroup, int newPosition)
-  {
-    if (oldGroup == ActiveCountryTree.GROUP_NEW && newGroup == ActiveCountryTree.GROUP_UP_TO_DATE)
-      Statistics.INSTANCE.myTrackerTrackMapDownload();
-    else if (oldGroup == ActiveCountryTree.GROUP_OUT_OF_DATE && newGroup == ActiveCountryTree.GROUP_UP_TO_DATE)
-      Statistics.INSTANCE.myTrackerTrackMapUpdate();
-  }
-
-  @Override
-  public void onCountryOptionsChanged(int group, int position, int newOptions, int requestOptions) {}
-
+  @SuppressWarnings("ResultOfMethodCallIgnored")
   @Override
   public void onCreate()
   {
     super.onCreate();
+    mLogger = LoggerFactory.INSTANCE.getLogger(LoggerFactory.Type.MISC);
+    mLogger.d(TAG, "Application is created");
+    mMainLoopHandler = new Handler(getMainLooper());
 
-    initParse();
+    initCoreIndependentSdks();
+
     mPrefs = getSharedPreferences(getString(R.string.pref_file_name), MODE_PRIVATE);
+    mBackgroundTracker = new AppBackgroundTracker();
+    mBackgroundTracker.addListener(mVisibleAppLaunchListener);
   }
 
-  public synchronized void initNativeCore()
+  private void initCoreIndependentSdks()
   {
-    if (mIsFrameworkInitialized)
+    initCrashlytics();
+    initPushWoosh();
+    initAppsFlyer();
+  }
+
+  public void initPlatformAndCore(){
+    initNativePlatform();
+    initNativeCore();
+  }
+
+  private void initNativePlatform()
+  {
+    if (mPlatformInitialized)
       return;
 
-    initPaths();
-    nativeInit(getApkPath(), getDataStoragePath(), getTempPath(), getObbGooglePath(),
-               BuildConfig.FLAVOR, BuildConfig.BUILD_TYPE,
-               Yota.isFirstYota(), UiUtils.isSmallTablet() || UiUtils.isBigTablet());
-    ActiveCountryTree.addListener(this);
-    initNativeStrings();
-    BookmarkManager.getIcons(); // init BookmarkManager (automatically loads bookmarks)
-    mIsFrameworkInitialized = true;
+    final boolean isInstallationIdFound = setInstallationIdToCrashlytics();
+
+    initTracker();
+
+    String settingsPath = getSettingsPath();
+    mLogger.d(TAG, "onCreate(), setting path = " + settingsPath);
+    String tempPath = getTempPath();
+    mLogger.d(TAG, "onCreate(), temp path = " + tempPath);
+    createPlatformDirectories(settingsPath, tempPath);
+
+    // First we need initialize paths and platform to have access to settings and other components.
+    nativePreparePlatform(settingsPath);
+    nativeInitPlatform(getApkPath(), getStoragePath(settingsPath), getTempPath(), getObbGooglePath(),
+                       BuildConfig.FLAVOR, BuildConfig.BUILD_TYPE, UiUtils.isTablet());
+
+    Config.setStatisticsEnabled(SharedPropertiesUtils.isStatisticsEnabled());
+
+    @SuppressWarnings("unused")
+    Statistics s = Statistics.INSTANCE;
+
+    if (!isInstallationIdFound)
+      setInstallationIdToCrashlytics();
+
+    mBackgroundTracker.addListener(mBackgroundListener);
+    TrackRecorder.init();
+    Editor.init();
+    UGC.init();
+    mPlatformInitialized = true;
   }
 
-  @SuppressWarnings("ResultOfMethodCallIgnored")
-  private void initPaths()
+  private void createPlatformDirectories(@NonNull String settingsPath, @NonNull String tempPath)
   {
-    final String extStoragePath = getDataStoragePath();
-    final String extTmpPath = getTempPath();
+    createPlatformDirectory(settingsPath);
+    createPlatformDirectory(tempPath);
+  }
 
-    new File(extStoragePath).mkdirs();
-    new File(extTmpPath).mkdirs();
+  private void createPlatformDirectory(@NonNull String path)
+  {
+    File directory = new File(path);
+    if (!directory.exists() && !directory.mkdirs())
+    {
+      boolean isPermissionGranted = PermissionsUtils.isExternalStorageGranted();
+      Throwable error = new IllegalStateException("Can't create directories for: " + path
+                                                  + " state = " + Environment.getExternalStorageState()
+                                                  + " isPermissionGranted = " + isPermissionGranted);
+      LoggerFactory.INSTANCE.getLogger(LoggerFactory.Type.STORAGE)
+                            .e(TAG, "Can't create directories for: " + path
+                                    + " state = " + Environment.getExternalStorageState()
+                                    + " isPermissionGranted = " + isPermissionGranted);
+      CrashlyticsUtils.logException(error);
+    }
+  }
+
+  private void initNativeCore()
+  {
+    if (mFrameworkInitialized)
+      return;
+
+    nativeInitFramework();
+
+    MapManager.nativeSubscribe(mStorageCallbacks);
+
+    initNativeStrings();
+    BookmarkManager.nativeLoadBookmarks();
+    TtsPlayer.INSTANCE.init(this);
+    ThemeSwitcher.restart(false);
+    LocationHelper.INSTANCE.initialize();
+    RoutingController.get().initialize();
+    TrafficManager.INSTANCE.initialize();
+    mFrameworkInitialized = true;
   }
 
   private void initNativeStrings()
@@ -129,10 +268,12 @@ public class MwmApplication extends android.app.Application implements ActiveCou
     nativeAddLocalization("country_status_download_failed", getString(R.string.country_status_download_failed));
     nativeAddLocalization("try_again", getString(R.string.try_again));
     nativeAddLocalization("not_enough_free_space_on_sdcard", getString(R.string.not_enough_free_space_on_sdcard));
-    nativeAddLocalization("dropped_pin", getString(R.string.dropped_pin));
+    nativeAddLocalization("placepage_unknown_place", getString(R.string.placepage_unknown_place));
     nativeAddLocalization("my_places", getString(R.string.my_places));
     nativeAddLocalization("my_position", getString(R.string.my_position));
     nativeAddLocalization("routes", getString(R.string.routes));
+    nativeAddLocalization("cancel", getString(R.string.cancel));
+    nativeAddLocalization("wifi", getString(R.string.wifi));
 
     nativeAddLocalization("routing_failed_unknown_my_position", getString(R.string.routing_failed_unknown_my_position));
     nativeAddLocalization("routing_failed_has_no_routing_file", getString(R.string.routing_failed_has_no_routing_file));
@@ -141,6 +282,47 @@ public class MwmApplication extends android.app.Application implements ActiveCou
     nativeAddLocalization("routing_failed_cross_mwm_building", getString(R.string.routing_failed_cross_mwm_building));
     nativeAddLocalization("routing_failed_route_not_found", getString(R.string.routing_failed_route_not_found));
     nativeAddLocalization("routing_failed_internal_error", getString(R.string.routing_failed_internal_error));
+    nativeAddLocalization("place_page_booking_rating", getString(R.string.place_page_booking_rating));
+  }
+
+  public void initCrashlytics()
+  {
+    if (!isCrashlyticsEnabled())
+      return;
+
+    if (isCrashlyticsInitialized())
+      return;
+
+    Fabric.with(this, new Crashlytics(), new CrashlyticsNdk());
+
+    nativeInitCrashlytics();
+
+    mCrashlyticsInitialized = true;
+  }
+
+  public boolean isCrashlyticsInitialized()
+  {
+    return mCrashlyticsInitialized;
+  }
+
+  private static boolean setInstallationIdToCrashlytics()
+  {
+    if (!isCrashlyticsEnabled())
+      return false;
+
+    final String installationId = Utils.getInstallationId();
+    // If installation id is not found this means id was not
+    // generated by alohalytics yet and it is a first run.
+    if (TextUtils.isEmpty(installationId))
+      return false;
+
+    Crashlytics.setString("AlohalyticsInstallationId", installationId);
+    return true;
+  }
+
+  public boolean arePlatformAndCoreInitialized()
+  {
+    return mFrameworkInitialized && mPlatformInitialized;
   }
 
   public String getApkPath()
@@ -150,14 +332,31 @@ public class MwmApplication extends android.app.Application implements ActiveCou
       return getPackageManager().getApplicationInfo(BuildConfig.APPLICATION_ID, 0).sourceDir;
     } catch (final NameNotFoundException e)
     {
-      Log.e(TAG, "Can't get apk path from PackageManager");
+      mLogger.e(TAG, "Can't get apk path from PackageManager", e);
       return "";
     }
   }
 
-  public String getDataStoragePath()
+  public static String getSettingsPath()
   {
     return Environment.getExternalStorageDirectory().getAbsolutePath() + Constants.MWM_DIR_POSTFIX;
+  }
+
+  private static String getStoragePath(String settingsPath)
+  {
+    String path = Config.getStoragePath();
+    if (!TextUtils.isEmpty(path))
+    {
+      File f = new File(path);
+      if (f.exists() && f.isDirectory())
+        return path;
+
+      path = new StoragePathManager().findMapsMeStorage(settingsPath);
+      Config.setStoragePath(path);
+      return path;
+    }
+
+    return settingsPath;
   }
 
   public String getTempPath()
@@ -167,10 +366,10 @@ public class MwmApplication extends android.app.Application implements ActiveCou
       return cacheDir.getAbsolutePath();
 
     return Environment.getExternalStorageDirectory().getAbsolutePath() +
-        String.format(Constants.STORAGE_PATH, BuildConfig.APPLICATION_ID, Constants.CACHE_DIR);
+           String.format(Constants.STORAGE_PATH, BuildConfig.APPLICATION_ID, Constants.CACHE_DIR);
   }
 
-  private String getObbGooglePath()
+  private static String getObbGooglePath()
   {
     final String storagePath = Environment.getExternalStorageDirectory().getAbsolutePath();
     return storagePath.concat(String.format(Constants.OBB_PATH, BuildConfig.APPLICATION_ID));
@@ -181,61 +380,91 @@ public class MwmApplication extends android.app.Application implements ActiveCou
     System.loadLibrary("mapswithme");
   }
 
-  private native void nativeInit(String apkPath, String storagePath,
-                                 String tmpPath, String obbGooglePath,
-                                 String flavorName, String buildType,
-                                 boolean isYota, boolean isTablet);
-
-  public native boolean nativeIsBenchmarking();
-
-  private native void nativeAddLocalization(String name, String value);
-
-  /**
-   * Check if device have at least {@code size} bytes free.
-   */
-  public native boolean hasFreeSpace(long size);
-
-  /*
-   * init Parse SDK
-   */
-  private void initParse()
+  private void initPushWoosh()
   {
-    Parse.initialize(this, PrivateVariables.parseApplicationId(), PrivateVariables.parseClientKey());
-    ParseInstallation.getCurrentInstallation().saveInBackground(new SaveCallback()
+    try
     {
-      @Override
-      public void done(ParseException e)
-      {
-        SharedPreferences prefs = prefs();
-        String previousId = prefs.getString(PREF_PARSE_INSTALLATION_ID, "");
-        String previousToken = prefs.getString(PREF_PARSE_DEVICE_TOKEN, "");
+      if (BuildConfig.PW_APPID.equals(PW_EMPTY_APP_ID))
+        return;
 
-        String newId = ParseInstallation.getCurrentInstallation().getInstallationId();
-        String newToken = ParseInstallation.getCurrentInstallation().getString("deviceToken");
-        if (!previousId.equals(newId) || !previousToken.equals(newToken))
-        {
-          org.alohalytics.Statistics.logEvent(AlohaHelper.PARSE_INSTALLATION_ID, newId);
-          org.alohalytics.Statistics.logEvent(AlohaHelper.PARSE_DEVICE_TOKEN, newToken);
-          prefs.edit()
-               .putString(PREF_PARSE_INSTALLATION_ID, newId)
-               .putString(PREF_PARSE_DEVICE_TOKEN, newToken).apply();
-        }
-      }
-    });
-  }
+      PushManager pushManager = PushManager.getInstance(this);
 
-  public void initCounters()
-  {
-    if (!mAreCountersInitialised)
+      pushManager.onStartup(this);
+      pushManager.registerForPushNotifications();
+
+      PushwooshHelper.get().setContext(this);
+      PushwooshHelper.get().synchronize();
+    }
+    catch(Exception e)
     {
-      mAreCountersInitialised = true;
-      Config.updateLaunchCounter();
-      PreferenceManager.setDefaultValues(this, R.xml.prefs_misc, false);
+      mLogger.e("Pushwoosh", "Failed to init Pushwoosh", e);
     }
   }
 
-  public void onUpgrade()
+  private void initAppsFlyer()
   {
-    Config.resetAppSessionCounters();
+    // There is no necessary to use a conversion data listener for a while.
+    // When it's needed keep in mind that the core can't be used from the mentioned listener unless
+    // the AppsFlyer sdk initializes after core initialization.
+    AppsFlyerLib.getInstance().init(PrivateVariables.appsFlyerKey(),
+                                    null /* conversionDataListener */);
+    AppsFlyerLib.getInstance().setDebugLog(BuildConfig.DEBUG);
+    AppsFlyerLib.getInstance().startTracking(this);
   }
+
+  @SuppressWarnings("unused")
+  void sendPushWooshTags(String tag, String[] values)
+  {
+    try
+    {
+      if (values.length == 1)
+        PushwooshHelper.get().sendTag(tag, values[0]);
+      else
+        PushwooshHelper.get().sendTag(tag, values);
+    }
+    catch(Exception e)
+    {
+      mLogger.e("Pushwoosh", "Failed to send pushwoosh tags", e);
+    }
+  }
+
+  private void initTracker()
+  {
+    MyTracker.setDebugMode(BuildConfig.DEBUG);
+    MyTracker.createTracker(PrivateVariables.myTrackerKey(), this);
+    final MyTrackerParams myParams = MyTracker.getTrackerParams();
+    myParams.setDefaultVendorAppPackage();
+    MyTracker.initTracker();
+  }
+
+  public static void onUpgrade()
+  {
+    Counters.resetAppSessionCounters();
+  }
+
+  @SuppressWarnings("unused")
+  void forwardToMainThread(final long taskPointer)
+  {
+    Message m = Message.obtain(mMainLoopHandler, new Runnable()
+    {
+      @Override
+      public void run()
+      {
+        nativeProcessTask(taskPointer);
+      }
+    });
+    m.obj = mMainQueueToken;
+    mMainLoopHandler.sendMessage(m);
+  }
+
+  private static native void nativePreparePlatform(String settingsPath);
+  private native void nativeInitPlatform(String apkPath, String storagePath, String tmpPath, String obbGooglePath,
+                                         String flavorName, String buildType, boolean isTablet);
+
+  private static native void nativeInitFramework();
+  private static native void nativeProcessTask(long taskPointer);
+  private static native void nativeAddLocalization(String name, String value);
+
+  @UiThread
+  private static native void nativeInitCrashlytics();
 }

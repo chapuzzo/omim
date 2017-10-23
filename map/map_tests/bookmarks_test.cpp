@@ -1,5 +1,7 @@
 #include "testing/testing.hpp"
 
+#include "drape_frontend/visual_params.hpp"
+
 #include "indexer/data_header.hpp"
 
 #include "map/framework.hpp"
@@ -9,8 +11,6 @@
 #include "platform/platform.hpp"
 #include "platform/preferred_languages.hpp"
 
-#include "graphics/color.hpp"
-
 #include "coding/internal/file_data.hpp"
 
 #include "std/fstream.hpp"
@@ -18,6 +18,8 @@
 
 namespace
 {
+static FrameworkParams const kFrameworkParams(false /* m_enableLocalAds */, false /* m_enableDiffs */);
+
 char const * kmlString =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
     "<kml xmlns=\"http://earth.google.com/kml/2.2\">"
@@ -120,22 +122,22 @@ char const * kmlString =
 
   void CheckBookmarks(BookmarkCategory const & cat)
   {
-    TEST_EQUAL(cat.GetBookmarksCount(), 4, ());
+    TEST_EQUAL(cat.GetUserMarkCount(), 4, ());
 
-    Bookmark const * bm = cat.GetBookmark(3);
+    Bookmark const * bm = static_cast<Bookmark const *>(cat.GetUserMark(3));
     TEST_EQUAL(bm->GetName(), "Nebraska", ());
     TEST_EQUAL(bm->GetType(), "placemark-red", ());
     TEST_EQUAL(bm->GetDescription(), "", ());
     TEST_EQUAL(bm->GetTimeStamp(), my::INVALID_TIME_STAMP, ());
 
-    bm = cat.GetBookmark(2);
+    bm = static_cast<Bookmark const *>(cat.GetUserMark(2));
     TEST_EQUAL(bm->GetName(), "Monongahela National Forest", ());
     TEST_EQUAL(bm->GetType(), "placemark-pink", ());
     TEST_EQUAL(bm->GetDescription(), "Huttonsville, WV 26273<br>", ());
     TEST_EQUAL(bm->GetTimeStamp(), 524214643, ());
 
-    bm = cat.GetBookmark(1);
-    m2::PointD org = bm->GetOrg();
+    bm = static_cast<Bookmark const *>(cat.GetUserMark(1));
+    m2::PointD org = bm->GetPivot();
     TEST_ALMOST_EQUAL_ULPS(MercatorBounds::XToLon(org.x), 27.566765, ());
     TEST_ALMOST_EQUAL_ULPS(MercatorBounds::YToLat(org.y), 53.900047, ());
     TEST_EQUAL(bm->GetName(), "From: Минск, Минская область, Беларусь", ());
@@ -143,8 +145,8 @@ char const * kmlString =
     TEST_EQUAL(bm->GetDescription(), "", ());
     TEST_EQUAL(bm->GetTimeStamp(), 888888888, ());
 
-    bm = cat.GetBookmark(0);
-    org = bm->GetOrg();
+    bm = static_cast<Bookmark const *>(cat.GetUserMark(0));
+    org = bm->GetPivot();
     TEST_ALMOST_EQUAL_ULPS(MercatorBounds::XToLon(org.x), 27.551532, ());
     TEST_ALMOST_EQUAL_ULPS(MercatorBounds::YToLat(org.y), 53.89306, ());
     TEST_EQUAL(bm->GetName(), "<MWM & Sons>", ());
@@ -155,9 +157,11 @@ char const * kmlString =
 
 UNIT_TEST(Bookmarks_ImportKML)
 {
-  Framework framework;
+  Framework framework(kFrameworkParams);
+  df::VisualParams::Init(1.0, 1024);
+
   BookmarkCategory cat("Default", framework);
-  TEST(cat.LoadFromKML(new MemReader(kmlString, strlen(kmlString))), ());
+  TEST(cat.LoadFromKML(make_unique<MemReader>(kmlString, strlen(kmlString))), ());
 
   CheckBookmarks(cat);
 
@@ -170,25 +174,26 @@ UNIT_TEST(Bookmarks_ExportKML)
 {
   char const * BOOKMARKS_FILE_NAME = "UnitTestBookmarks.kml";
 
-  Framework framework;
+  Framework framework(kFrameworkParams);
+  df::VisualParams::Init(1.0, 1024);
+
   BookmarkCategory cat("Default", framework);
-  TEST(cat.LoadFromKML(new MemReader(kmlString, strlen(kmlString))), ());
+  TEST(cat.LoadFromKML(make_unique<MemReader>(kmlString, strlen(kmlString))), ());
   CheckBookmarks(cat);
 
   TEST_EQUAL(cat.IsVisible(), false, ());
   // Change visibility
-  cat.SetVisible(true);
+  cat.SetIsVisible(true);
   TEST_EQUAL(cat.IsVisible(), true, ());
 
-  {
-    ofstream of(BOOKMARKS_FILE_NAME);
-    cat.SaveToKML(of);
-  }
+  ofstream of(BOOKMARKS_FILE_NAME);
+  cat.SaveToKML(of);
+  of.close();
 
-  cat.ClearBookmarks();
-  TEST_EQUAL(cat.GetBookmarksCount(), 0, ());
+  cat.Clear();
+  TEST_EQUAL(cat.GetUserMarkCount(), 0, ());
 
-  TEST(cat.LoadFromKML(new FileReader(BOOKMARKS_FILE_NAME)), ());
+  TEST(cat.LoadFromKML(make_unique<FileReader>(BOOKMARKS_FILE_NAME)), ());
   CheckBookmarks(cat);
   TEST_EQUAL(cat.IsVisible(), true, ());
 
@@ -219,7 +224,7 @@ namespace
   UserMark const * GetMark(Framework & fm, m2::PointD const & pt)
   {
     m2::AnyRectD rect;
-    fm.GetNavigator().GetTouchRect(fm.GtoP(pt), 20, rect);
+    fm.GetTouchRect(fm.GtoP(pt), 20, rect);
 
     return fm.GetBookmarkManager().FindNearestUserMark(rect);
   }
@@ -229,7 +234,7 @@ namespace
     UserMark const * mark = GetMark(fm, pt);
     ASSERT(mark != NULL, ());
     ASSERT(mark->GetContainer() != NULL, ());
-    ASSERT(mark->GetContainer()->GetType() == UserMarkContainer::BOOKMARK_MARK, ());
+    ASSERT(mark->GetContainer()->GetType() == UserMark::Type::BOOKMARK, ());
     return static_cast<Bookmark const *>(mark);
   }
 
@@ -241,7 +246,7 @@ namespace
   BookmarkCategory const * GetCategory(Bookmark const * bm)
   {
     ASSERT(bm->GetContainer() != NULL, ());
-    ASSERT(bm->GetContainer()->GetType() == UserMarkContainer::BOOKMARK_MARK, ());
+    ASSERT(bm->GetContainer()->GetType() == UserMark::Type::BOOKMARK, ());
     return static_cast<BookmarkCategory const *>(bm->GetContainer());
   }
 
@@ -251,7 +256,7 @@ namespace
     if (mark == NULL)
       return false;
 
-    if (mark->GetContainer()->GetType() != UserMarkContainer::BOOKMARK_MARK)
+    if (mark->GetContainer()->GetType() != UserMark::Type::BOOKMARK)
       return false;
 
     return true;
@@ -260,7 +265,9 @@ namespace
 
 UNIT_TEST(Bookmarks_Timestamp)
 {
-  Framework fm;
+  Framework fm(kFrameworkParams);
+  df::VisualParams::Init(1.0, 1024);
+
   m2::PointD const orgPoint(10, 10);
 
   char const * arrCat[] = { "cat", "cat1" };
@@ -279,26 +286,33 @@ UNIT_TEST(Bookmarks_Timestamp)
   TEST_EQUAL(fm.AddBookmark(1, orgPoint, b3), 0, ());
 
   // Check bookmarks order here. First added should be in the bottom of the list.
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmark(1), pBm, ());
+  TEST_EQUAL(fm.GetBmCategory(0)->GetUserMark(1), pBm, ());
 
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmark(1)->GetName(), "name", ());
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmark(1)->GetType(), "type", ());
+  Bookmark const * bm01 = static_cast<Bookmark const *>(fm.GetBmCategory(0)->GetUserMark(1));
 
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmark(0)->GetName(), "newName", ());
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmark(0)->GetType(), "newType", ());
+  TEST_EQUAL(bm01->GetName(), "name", ());
+  TEST_EQUAL(bm01->GetType(), "type", ());
 
-  TEST_EQUAL(fm.GetBmCategory(1)->GetBookmark(0)->GetName(), "newName", ());
-  TEST_EQUAL(fm.GetBmCategory(1)->GetBookmark(0)->GetType(), "newType", ());
+  Bookmark const * bm00 = static_cast<Bookmark const *>(fm.GetBmCategory(0)->GetUserMark(0));
 
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmarksCount(), 2, ());
-  TEST_EQUAL(fm.GetBmCategory(1)->GetBookmarksCount(), 1, ());
+  TEST_EQUAL(bm00->GetName(), "newName", ());
+  TEST_EQUAL(bm00->GetType(), "newType", ());
+
+  Bookmark const * bm10 = static_cast<Bookmark const *>(fm.GetBmCategory(1)->GetUserMark(0));
+
+  TEST_EQUAL(bm10->GetName(), "newName", ());
+  TEST_EQUAL(bm10->GetType(), "newType", ());
+
+  TEST_EQUAL(fm.GetBmCategory(0)->GetUserMarkCount(), 2, ());
+  TEST_EQUAL(fm.GetBmCategory(1)->GetUserMarkCount(), 1, ());
 
   DeleteCategoryFiles(arrCat);
 }
 
 UNIT_TEST(Bookmarks_Getting)
 {
-  Framework fm;
+  Framework fm(kFrameworkParams);
+  df::VisualParams::Init(1.0, 1024);
   fm.OnSize(800, 400);
   fm.ShowRect(m2::RectD(0, 0, 80, 40));
 
@@ -354,10 +368,11 @@ UNIT_TEST(Bookmarks_Getting)
   TEST_EQUAL(mark->GetName(), "4", ());
   TEST_EQUAL(mark->GetType(), "placemark-blue", ());
 
-  TEST_EQUAL(cat->GetBookmarksCount(), 2, ());
+  TEST_EQUAL(cat->GetUserMarkCount(), 2, ());
 
-  fm.GetBmCategory(2)->DeleteBookmark(0);
-  TEST_EQUAL(cat->GetBookmarksCount(), 1, ());
+  BookmarkCategory * cat3 = fm.GetBmCategory(2);
+  cat3->DeleteUserMark(0);
+  TEST_EQUAL(cat->GetUserMarkCount(), 1, ());
 
   DeleteCategoryFiles(arrCat);
 }
@@ -374,49 +389,28 @@ namespace
 
   void CheckPlace(Framework const & fm, double lat, double lon, POIInfo const & poi)
   {
-    search::AddressInfo info;
-    fm.GetAddressInfoForGlobalPoint(MercatorBounds::FromLatLon(lat, lon), info);
+    search::AddressInfo const info = fm.GetAddressInfoAtPoint(MercatorBounds::FromLatLon(lat, lon));
 
-    TEST_EQUAL(info.m_name, poi.m_name, ());
     TEST_EQUAL(info.m_street, poi.m_street, ());
     TEST_EQUAL(info.m_house, poi.m_house, ());
-    TEST_EQUAL(info.m_types.size(), 1, ());
-    TEST_EQUAL(info.GetBestType(), poi.m_type, ());
+    // TODO(AlexZ): AddressInfo should contain addresses only. Refactor.
+    //TEST_EQUAL(info.m_name, poi.m_name, ());
+    //TEST_EQUAL(info.m_types.size(), 1, ());
+    //TEST_EQUAL(info.GetBestType(), poi.m_type, ());
   }
 }
 
 UNIT_TEST(Bookmarks_AddressInfo)
 {
   // Maps added in constructor (we need minsk-pass.mwm only)
-  Framework fm;
+  Framework fm(kFrameworkParams);
   fm.DeregisterAllMaps();
   fm.RegisterMap(platform::LocalCountryFile::MakeForTesting("minsk-pass"));
   fm.OnSize(800, 600);
 
-  // assume that developers have English or Russian system language :)
-  string const lang = languages::GetCurrentNorm();
-  LOG(LINFO, ("Current language =", lang));
-
-  // default name (street in russian, category in english).
-  size_t index = 0;
-  if (lang == "ru")
-    index = 1;
-  if (lang == "en")
-    index = 2;
-
-  POIInfo poi1[] = {
-    { "Планета Pizza", "улица Карла Маркса", "10", "cafe" },
-    { "Планета Pizza", "улица Карла Маркса", "10", "кафе" },
-    { "Планета Pizza", "vulica Karla Marksa", "10", "cafe" }
-  };
-  CheckPlace(fm, 53.8964918, 27.555559, poi1[index]);
-
-  POIInfo poi2[] = {
-    { "Нц Шашек И Шахмат", "улица Карла Маркса", "10", "hotel" },
-    { "Нц Шашек И Шахмат", "улица Карла Маркса", "10", "гостиница" },
-    { "Нц Шашек И Шахмат", "vulica Karla Marksa", "10", "hotel" }
-  };
-  CheckPlace(fm, 53.8964365, 27.5554007, poi2[index]);
+  // Our code always uses "default" street name for addresses.
+  CheckPlace(fm, 53.8964918, 27.555559, { "Планета Pizza", "улица Карла Маркса", "10", "Cafe" });
+  CheckPlace(fm, 53.8964365, 27.5554007, { "Нц Шашек И Шахмат", "улица Карла Маркса", "10", "Hotel" });
 }
 
 UNIT_TEST(Bookmarks_IllegalFileName)
@@ -472,7 +466,7 @@ UNIT_TEST(Bookmarks_UniqueFileName)
 
 UNIT_TEST(Bookmarks_AddingMoving)
 {
-  Framework fm;
+  Framework fm(kFrameworkParams);
   fm.OnSize(800, 400);
   fm.ShowRect(m2::RectD(0, 0, 80, 40));
 
@@ -509,7 +503,7 @@ UNIT_TEST(Bookmarks_AddingMoving)
   mark = GetBookmarkPxPoint(fm, pixelPoint);
   cat = GetCategory(mark);
   TEST_EQUAL(cat->GetName(), arrCat[0], ());
-  TEST_EQUAL(fm.GetBmCategory(0)->GetBookmarksCount(), 2,
+  TEST_EQUAL(fm.GetBmCategory(0)->GetUserMarkCount(), 2,
              ("Bookmark wasn't moved from one category to another"));
   TEST_EQUAL(mark->GetName(), "name2", ());
   TEST_EQUAL(mark->GetType(), "placemark-blue", ());
@@ -548,18 +542,18 @@ char const * kmlString2 =
 
 UNIT_TEST(Bookmarks_InnerFolder)
 {
-  Framework framework;
+  Framework framework(kFrameworkParams);
   BookmarkCategory cat("Default", framework);
-  TEST(cat.LoadFromKML(new MemReader(kmlString2, strlen(kmlString2))), ());
+  TEST(cat.LoadFromKML(make_unique<MemReader>(kmlString2, strlen(kmlString2))), ());
 
-  TEST_EQUAL(cat.GetBookmarksCount(), 1, ());
+  TEST_EQUAL(cat.GetUserMarkCount(), 1, ());
 }
 
 UNIT_TEST(BookmarkCategory_EmptyName)
 {
-  Framework framework;
+  Framework framework(kFrameworkParams);
   unique_ptr<BookmarkCategory> pCat(new BookmarkCategory("", framework));
-  TEST(pCat->AddBookmark(m2::PointD(0, 0), BookmarkData("", "placemark-red")), ());
+  static_cast<Bookmark *>(pCat->CreateUserMark(m2::PointD(0, 0)))->SetData(BookmarkData("", "placemark-red"));
   TEST(pCat->SaveToKMLFile(), ());
 
   pCat->SetName("xxx");
@@ -595,7 +589,7 @@ char const * kmlString3 =
       return false;
     if (b1.GetType() != b2.GetType())
       return false;
-    if (!m2::AlmostEqualULPs(b1.GetOrg(), b2.GetOrg()))
+    if (!m2::AlmostEqualULPs(b1.GetPivot(), b2.GetPivot()))
       return false;
     if (!my::AlmostEqualULPs(b1.GetScale(), b2.GetScale()))
       return false;
@@ -607,29 +601,31 @@ char const * kmlString3 =
 
 UNIT_TEST(Bookmarks_SpecialXMLNames)
 {
-  Framework framework;
+  Framework framework(kFrameworkParams);
   BookmarkCategory cat1("", framework);
-  TEST(cat1.LoadFromKML(new MemReader(kmlString3, strlen(kmlString3))), ());
+  TEST(cat1.LoadFromKML(make_unique<MemReader>(kmlString3, strlen(kmlString3))), ());
 
-  TEST_EQUAL(cat1.GetBookmarksCount(), 1, ());
+  TEST_EQUAL(cat1.GetUserMarkCount(), 1, ());
   TEST(cat1.SaveToKMLFile(), ());
 
   unique_ptr<BookmarkCategory> const cat2(BookmarkCategory::CreateFromKMLFile(cat1.GetFileName(), framework));
   TEST(cat2.get(), ());
-  TEST_EQUAL(cat2->GetBookmarksCount(), 1, ());
+  TEST_EQUAL(cat2->GetUserMarkCount(), 1, ());
 
   TEST_EQUAL(cat1.GetName(), "3663 and M & J Seafood Branches", ());
   TEST_EQUAL(cat1.GetName(), cat2->GetName(), ());
   TEST_EQUAL(cat1.GetFileName(), cat2->GetFileName(), ());
-  TEST(EqualBookmarks(*cat1.GetBookmark(0), *cat2->GetBookmark(0)), ());
-  TEST_EQUAL(cat1.GetBookmark(0)->GetName(), "![X1]{X2}(X3)", ());
+  Bookmark const * bm1 = static_cast<Bookmark const *>(cat1.GetUserMark(0));
+  Bookmark const * bm2 = static_cast<Bookmark const *>(cat2->GetUserMark(0));
+  TEST(EqualBookmarks(*bm1, *bm2), ());
+  TEST_EQUAL(bm1->GetName(), "![X1]{X2}(X3)", ());
 
   TEST(my::DeleteFileX(cat1.GetFileName()), ());
 }
 
 UNIT_TEST(TrackParsingTest_1)
 {
-  Framework framework;
+  Framework framework(kFrameworkParams);
   string const kmlFile = GetPlatform().TestsDataPathForFile("kml-with-track-kml.test");
   BookmarkCategory * cat = BookmarkCategory::CreateFromKMLFile(kmlFile, framework);
   TEST(cat, ("Category can't be created"));
@@ -637,10 +633,10 @@ UNIT_TEST(TrackParsingTest_1)
   TEST_EQUAL(cat->GetTracksCount(), 4, ());
 
   string names[4] = { "Option1", "Pakkred1", "Pakkred2", "Pakkred3"};
-  graphics::Color col[4] = {graphics::Color(230, 0, 0, 255),
-                            graphics::Color(171, 230, 0, 255),
-                            graphics::Color(0, 230, 117, 255),
-                            graphics::Color(0, 59, 230, 255)};
+  dp::Color col[4] = {dp::Color(230, 0, 0, 255),
+                      dp::Color(171, 230, 0, 255),
+                      dp::Color(0, 230, 117, 255),
+                      dp::Color(0, 59, 230, 255)};
   double length[4] = {3525.46839061, 27174.11393166, 27046.0456586, 23967.35765800};
 
   for (size_t i = 0; i < ARRAY_SIZE(names); ++i)
@@ -648,13 +644,14 @@ UNIT_TEST(TrackParsingTest_1)
     Track const * track = cat->GetTrack(i);
     TEST_EQUAL(names[i], track->GetName(), ());
     TEST(fabs(track->GetLengthMeters() - length[i]) < 1.0E-6, (track->GetLengthMeters(), length[i]));
-    TEST_EQUAL(col[i], track->GetMainColor(), ());
+    TEST_GREATER(track->GetLayerCount(), 0, ());
+    TEST_EQUAL(col[i], track->GetColor(0), ());
   }
 }
 
 UNIT_TEST(TrackParsingTest_2)
 {
-  Framework framework;
+  Framework framework(kFrameworkParams);
   string const kmlFile = GetPlatform().TestsDataPathForFile("kml-with-track-from-google-earth.test");
   BookmarkCategory * cat = BookmarkCategory::CreateFromKMLFile(kmlFile, framework);
   TEST(cat, ("Category can't be created"));
@@ -662,6 +659,6 @@ UNIT_TEST(TrackParsingTest_2)
   TEST_EQUAL(cat->GetTracksCount(), 1, ());
   Track const * track = cat->GetTrack(0);
   TEST_EQUAL(track->GetName(), "XY", ());
-  TEST_EQUAL(track->GetMainColor(), graphics::Color(57, 255, 32, 255), ());
+  TEST_GREATER(track->GetLayerCount(), 0, ());
+  TEST_EQUAL(track->GetColor(0), dp::Color(57, 255, 32, 255), ());
 }
-

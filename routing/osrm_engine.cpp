@@ -1,5 +1,5 @@
-#include "osrm_engine.hpp"
-#include "osrm2feature_map.hpp"
+#include "routing/osrm_engine.hpp"
+#include "routing/osrm2feature_map.hpp"
 
 #include "base/logging.hpp"
 #include "base/timer.hpp"
@@ -50,49 +50,9 @@ void FindWeightsMatrix(TRoutingNodes const & sources, TRoutingNodes const & targ
   result.swap(*resultTable);
 }
 
-bool FindSingleRoute(FeatureGraphNode const & source, FeatureGraphNode const & target,
-                     TRawDataFacade & facade, RawRoutingResult & rawRoutingResult)
-{
-  SearchEngineData engineData;
-  InternalRouteResult result;
-  ShortestPathRouting<TRawDataFacade> pathFinder(&facade, engineData);
-  PhantomNodes nodes;
-  nodes.source_phantom = source.node;
-  nodes.target_phantom = target.node;
-
-  if ((nodes.source_phantom.forward_node_id != INVALID_NODE_ID ||
-       nodes.source_phantom.reverse_node_id != INVALID_NODE_ID) &&
-      (nodes.target_phantom.forward_node_id != INVALID_NODE_ID ||
-       nodes.target_phantom.reverse_node_id != INVALID_NODE_ID))
-  {
-    result.segment_end_coordinates.push_back(nodes);
-    pathFinder({nodes}, {}, result);
-  }
-
-  if (IsRouteExist(result))
-  {
-    rawRoutingResult.sourceEdge = source;
-    rawRoutingResult.targetEdge = target;
-    rawRoutingResult.shortestPathLength = result.shortest_path_length;
-    for (auto const & path : result.unpacked_path_segments)
-    {
-      vector<RawPathData> data;
-      data.reserve(path.size());
-      for (auto const & element : path)
-      {
-        data.emplace_back(element.node, element.segment_duration);
-      }
-      rawRoutingResult.unpackedPathSegments.emplace_back(move(data));
-    }
-    return true;
-  }
-
-  return false;
-}
-
 FeatureGraphNode::FeatureGraphNode(NodeID const nodeId, bool const isStartNode,
-                                   string const & mwmName)
-    : segmentPoint(m2::PointD::Zero()), mwmName(mwmName)
+                                   Index::MwmId const & id)
+    : segmentPoint(m2::PointD::Zero()), mwmId(id)
 {
   node.forward_node_id = isStartNode ? nodeId : INVALID_NODE_ID;
   node.reverse_node_id = isStartNode ? INVALID_NODE_ID : nodeId;
@@ -105,8 +65,8 @@ FeatureGraphNode::FeatureGraphNode(NodeID const nodeId, bool const isStartNode,
 }
 
 FeatureGraphNode::FeatureGraphNode(NodeID const nodeId, NodeID const reverseNodeId,
-                                   bool const isStartNode, string const & mwmName)
-    : segmentPoint(m2::PointD::Zero()), mwmName(mwmName)
+                                   bool const isStartNode, Index::MwmId const & id)
+    : segmentPoint(m2::PointD::Zero()), mwmId(id)
 {
   node.forward_node_id = isStartNode ? nodeId : reverseNodeId;
   node.reverse_node_id = isStartNode ? reverseNodeId : nodeId;

@@ -1,46 +1,39 @@
 #pragma once
 
-#include "drape/shader.hpp"
-#include "drape/pointers.hpp"
 #include "drape/glconstants.hpp"
+#include "drape/pointers.hpp"
+#include "drape/shader.hpp"
 
-#include "std/string.hpp"
-
-#ifdef DEBUG
-  #include "../std/unique_ptr.hpp"
-#endif
+#include <map>
+#include <string>
 
 namespace dp
 {
-
-#ifdef DEBUG
-  class UniformValidator;
-  typedef int32_t UniformSize;
-  typedef pair<glConst, UniformSize> UniformTypeAndSize;
-#endif
-
 class GpuProgram
 {
 public:
-  GpuProgram(RefPointer<Shader> vertexShader,
-             RefPointer<Shader> fragmentShader);
+  GpuProgram(int programIndex, ref_ptr<Shader> vertexShader, ref_ptr<Shader> fragmentShader,
+             uint8_t textureSlotsCount);
   ~GpuProgram();
 
   void Bind();
   void Unbind();
 
-  int8_t GetAttributeLocation(string const & attributeName) const;
-  int8_t GetUniformLocation(string const & uniformName) const;
+  int8_t GetAttributeLocation(std::string const & attributeName) const;
+  int8_t GetUniformLocation(std::string const & uniformName) const;
+
+private:
+  void LoadUniformLocations();
 
 private:
   uint32_t m_programID;
 
-#ifdef DEBUG
-private:
-  unique_ptr<UniformValidator> m_validator;
-public:
-  bool HasUniform(string const & name, glConst type, UniformSize size);
-#endif
-};
+  ref_ptr<Shader> m_vertexShader;
+  ref_ptr<Shader> m_fragmentShader;
 
-} // namespace dp
+  using TUniformLocations = std::map<std::string, int8_t>;
+  TUniformLocations m_uniforms;
+
+  uint8_t const m_textureSlotsCount;
+};
+}  // namespace dp
